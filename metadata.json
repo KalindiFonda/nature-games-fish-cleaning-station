@@ -1,0 +1,8 @@
+{
+  "name": "Fish cleaning Game - Fish aquarium",
+  "description": "An interactive procedural smooth low-poly simulation of Cleaner Wrasse, Sharknose Goby, Coral Grouper, Queen Parrotfish, Yellowtail Goatfish, Queen Triggerfish, Atlantic Trumpetfish, Spotted Moray, Whitespotted Filefish, and French Grunt at a reef cleaning station.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
