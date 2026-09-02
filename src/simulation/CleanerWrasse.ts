@@ -83,6 +83,19 @@ export class CleanerWrasse {
     }
   }
 
+  public stunTimer: number = 0;
+  private spitDir: { x: number; y: number } = { x: 0, y: 0 };
+
+  /** Knockback when a client clamps shut on the cleaner - spat out and
+   * briefly out of control, exactly like getting chomped deserves. */
+  public spit(from: { x: number; y: number }) {
+    const dx = this.headPos.x - from.x;
+    const dy = this.headPos.y - from.y;
+    const d = Math.hypot(dx, dy) || 1;
+    this.spitDir = { x: dx / d, y: dy / d };
+    this.stunTimer = 48; // ~0.8s in frame units
+  }
+
   public setCleaningSpots(spots: Vector2D[]) {
     this.cleaningSpots = spots;
   }
@@ -140,6 +153,22 @@ export class CleanerWrasse {
       this.headPos.y += Math.sin(this.breathPhase * 0.4) * 0.12 * safeDt;
       this.headPos.x += Math.cos(this.breathPhase * 0.25) * 0.06 * safeDt;
 
+      this.updateSpine(safeDt);
+      return;
+    }
+
+    if (this.stunTimer > 0) {
+      // Spat out: tumble away from the clamped jaw, tail thrashing
+      this.stunTimer -= safeDt;
+      // Tumble: flung heading plus a wobble as it cartwheels away
+      this.heading =
+        Math.atan2(this.spitDir.y, this.spitDir.x) + Math.sin(this.stunTimer * 0.55) * 0.7;
+      const kick = 9 * (this.stunTimer / 48 + 0.25);
+      this.headPos.x += this.spitDir.x * kick * safeDt;
+      this.headPos.y += this.spitDir.y * kick * safeDt;
+      this.swimPhase += 0.35 * safeDt;
+      this.finPhase += 0.5 * safeDt;
+      this.applyBoundaryRepulsion(width, height, safeDt);
       this.updateSpine(safeDt);
       return;
     }

@@ -32,6 +32,26 @@ export class Reef {
 
     // 2. Render Marine Organisms on the slope (scaled down proportionally to fit the 50% mountain)
     ctx.save();
+
+    // Background layer: dimmed, smaller organisms peeking over the ridge
+    // line, suggesting more reef behind the visible slope
+    ctx.save();
+    ctx.globalAlpha = 0.45;
+    this.renderStaghornCoral(ctx, bottomX * 0.16, startY + (height - startY) * 0.13 - 14, 0.45);
+    this.renderTubeSponges(ctx, bottomX * 0.42, startY + (height - startY) * 0.4 - 12, 0.4);
+    this.renderSoftAnemone(ctx, bottomX * 0.58, startY + (height - startY) * 0.56 - 10, 0.42);
+    this.renderBrainCoral(ctx, bottomX * 0.75, startY + (height - startY) * 0.73 - 8, 0.4);
+    ctx.restore();
+
+    // Spread organisms across the whole rock face, not just the ridge line
+    this.renderTubeSponges(ctx, bottomX * 0.2, startY + (height - startY) * 0.19, 0.5);
+    this.renderTubeSponges(ctx, bottomX * 0.14, startY + (height - startY) * 0.42, 0.42);
+    this.renderSoftAnemone(ctx, bottomX * 0.32, startY + (height - startY) * 0.58, 0.5);
+    this.renderStaghornCoral(ctx, bottomX * 0.5, startY + (height - startY) * 0.78, 0.55);
+    this.renderBrainCoral(ctx, bottomX * 0.38, startY + (height - startY) * 0.88, 0.45);
+    this.renderPlateCoral(ctx, bottomX * 0.68, startY + (height - startY) * 0.92, 0.5);
+    this.renderBrainCoral(ctx, bottomX * 0.99, startY + (height - startY) * 0.985, 0.5);
+
     // Tube Sponges at upper ledge
     this.renderTubeSponges(ctx, bottomX * 0.08, startY + (height - startY) * 0.08, 0.65);
 

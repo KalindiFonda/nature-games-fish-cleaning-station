@@ -1,5 +1,6 @@
 import { Vector2D, Parasite } from '../types';
 import { lerp, clamp } from '../utils/math';
+import { parasiteUnit, drawParasite, drawEatRing, subsampleParasites } from './parasiteFx';
 
 export interface CleaningTargetSpot {
   id: string;
@@ -28,7 +29,7 @@ export class SpottedMoray {
   public heading: number = -0.32; // Diagonally up-right from reef crevice
 
   // Scale 9.4 (2.0x relative to Queen Triggerfish baseline 4.7)
-  public scale: number = 9.4;
+  public scale: number = 5.6;
 
   public state: 'entering' | 'stationary' | 'exiting' | 'exited' = 'entering';
   public entrySpeed: number = 2.0;
@@ -52,11 +53,17 @@ export class SpottedMoray {
   // Parasites on needle teeth, tubular nostrils, snout, cheeks, and neck
   public parasites: Parasite[] = [];
 
+  // Cavity gates driven by the ClientDirector (1 = open/eatable):
+  // gill parasites hide under the operculum flap, teeth behind the lips.
+  public gillOpen: number = 1;
+  public mouthGate: number = 1;
+
   constructor(canvasWidth: number, canvasHeight: number) {
     this.calculatePositions(canvasWidth, canvasHeight);
     this.pos = { ...this.creviceOrigin };
     this.extension = 0.0;
     this.initParasites();
+    this.parasites = subsampleParasites(this.parasites, 16);
   }
 
   public calculatePositions(width: number, height: number) {
@@ -233,6 +240,8 @@ export class SpottedMoray {
 
     for (const p of this.parasites) {
       if (p.removed) continue;
+      if (p.attachPart === 'operculum' && this.gillOpen < 0.6) continue;
+      if ((p.attachPart === 'upperTeeth' || p.attachPart === 'lowerTeeth') && this.mouthGate < 0.6) continue;
 
       const lp = this.getParasiteLocalPos(p);
       const wx = this.pos.x + lp.x;
@@ -243,24 +252,21 @@ export class SpottedMoray {
       // Check Wrasse
       if (wrasseMouth) {
         const dWrasse = Math.hypot(wx - wrasseMouth.x, wy - wrasseMouth.y);
-        const threshold = (p.type === 'teeth' ? 26 : 22) * (wrasseScale / 2.2);
+        const threshold = (p.type === 'teeth' ? 26 : 22) * wrasseScale;
         if (dWrasse < threshold) isHovered = true;
       }
 
       // Check Goby
       if (gobiMouth && !isHovered) {
         const dGobi = Math.hypot(wx - gobiMouth.x, wy - gobiMouth.y);
-        const threshold = (p.type === 'teeth' ? 24 : 20) * (gobiScale / 2.0);
+        const threshold = (p.type === 'teeth' ? 24 : 20) * gobiScale;
         if (dGobi < threshold) isHovered = true;
       }
 
+      // Eat on touch, same as every other client species
       if (isHovered) {
-        p.hoverTimer += 0.02 * dt;
-        if (p.hoverTimer >= (p.type === 'teeth' ? 0.35 : 0.45)) {
-          p.removed = true;
-        }
-      } else {
-        p.hoverTimer = Math.max(0, p.hoverTimer - 0.008 * dt);
+        p.removed = true;
+        p.hoverTimer = 1;
       }
     }
   }
@@ -925,11 +931,7 @@ export class SpottedMoray {
           ctx.save();
           const lp = { x: p.localX * s, y: p.localY * s };
           ctx.translate(lp.x, lp.y);
-          ctx.beginPath();
-          ctx.arc(0, 0, (4 + (1 - p.hoverTimer) * 14) * (s / 3.8), 0, Math.PI * 2);
-          ctx.strokeStyle = `rgba(34, 211, 238, ${p.hoverTimer * 0.8})`;
-          ctx.lineWidth = 1.5;
-          ctx.stroke();
+          drawEatRing(ctx, parasiteUnit(s), p.hoverTimer);
           ctx.restore();
           p.hoverTimer -= 0.02;
         }
@@ -958,14 +960,7 @@ export class SpottedMoray {
         ctx.stroke();
       }
 
-      // Parasite Crustacean/Isopod Body
-      ctx.beginPath();
-      ctx.ellipse(0, 0, 2.4 * (s / 3.8), 1.6 * (s / 3.8), 0.2, 0, Math.PI * 2);
-      ctx.fillStyle = p.type === 'teeth' ? '#f59e0b' : '#ef4444';
-      ctx.fill();
-      ctx.strokeStyle = '#451a03';
-      ctx.lineWidth = 0.6;
-      ctx.stroke();
+      drawParasite(ctx, parasiteUnit(s), this.animTime, p.id, p.type === 'teeth');
 
       ctx.restore();
     }

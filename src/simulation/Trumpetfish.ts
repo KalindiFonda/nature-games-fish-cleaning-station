@@ -1,5 +1,6 @@
 import { Vector2D, Parasite } from '../types';
 import { lerp, clamp } from '../utils/math';
+import { parasiteUnit, drawParasite, drawEatRing, subsampleParasites } from './parasiteFx';
 
 export interface CleaningTargetSpot {
   id: string;
@@ -24,7 +25,7 @@ export class Trumpetfish {
   public heading: number = Math.PI; // Facing left toward cleaning station
 
   // Scale 6.5
-  public scale: number = 6.5;
+  public scale: number = 3.9;
 
   public state: 'entering' | 'stationary' | 'exiting' | 'exited' = 'entering';
   public entrySpeed: number = 2.5;
@@ -45,6 +46,11 @@ export class Trumpetfish {
   // Parasites on tubular snout, tiny terminal mouth, barbel, elongated torso, and rear fins
   public parasites: Parasite[] = [];
 
+  // Cavity gates driven by the ClientDirector (1 = open/eatable):
+  // gill parasites hide under the operculum flap, teeth behind the lips.
+  public gillOpen: number = 1;
+  public mouthGate: number = 1;
+
   constructor(canvasWidth: number, canvasHeight: number) {
     this.pos = {
       x: canvasWidth + 500,
@@ -56,6 +62,7 @@ export class Trumpetfish {
     };
 
     this.initParasites();
+    this.parasites = subsampleParasites(this.parasites, 12);
   }
 
   /**
@@ -230,6 +237,8 @@ export class Trumpetfish {
   ) {
     for (const p of this.parasites) {
       if (p.removed) continue;
+      if (p.attachPart === 'operculum' && this.gillOpen < 0.6) continue;
+      if ((p.attachPart === 'upperTeeth' || p.attachPart === 'lowerTeeth') && this.mouthGate < 0.6) continue;
 
       const lp = this.getParasiteLocalPos(p);
       const wx = this.pos.x + lp.x;
@@ -240,24 +249,21 @@ export class Trumpetfish {
       // Check Wrasse
       if (wrasseMouth) {
         const dWrasse = Math.hypot(wx - wrasseMouth.x, wy - wrasseMouth.y);
-        const threshold = (p.type === 'teeth' ? 24 : 20) * (wrasseScale / 2.2);
+        const threshold = (p.type === 'teeth' ? 24 : 20) * wrasseScale;
         if (dWrasse < threshold) isHovered = true;
       }
 
       // Check Goby
       if (gobiMouth && !isHovered) {
         const dGobi = Math.hypot(wx - gobiMouth.x, wy - gobiMouth.y);
-        const threshold = (p.type === 'teeth' ? 22 : 18) * (gobiScale / 2.0);
+        const threshold = (p.type === 'teeth' ? 22 : 18) * gobiScale;
         if (dGobi < threshold) isHovered = true;
       }
 
+      // Eat on touch, same as every other client species
       if (isHovered) {
-        p.hoverTimer += 0.02 * dt;
-        if (p.hoverTimer >= (p.type === 'teeth' ? 0.35 : 0.45)) {
-          p.removed = true;
-        }
-      } else {
-        p.hoverTimer = Math.max(0, p.hoverTimer - 0.008 * dt);
+        p.removed = true;
+        p.hoverTimer = 1;
       }
     }
   }
@@ -863,11 +869,7 @@ export class Trumpetfish {
         if (p.hoverTimer > 0) {
           ctx.save();
           ctx.translate(lp.x, lp.y);
-          ctx.beginPath();
-          ctx.arc(0, 0, (4 + (1 - p.hoverTimer) * 12) * (s / 3.6), 0, Math.PI * 2);
-          ctx.strokeStyle = `rgba(34, 211, 238, ${p.hoverTimer * 0.8})`;
-          ctx.lineWidth = 1.5;
-          ctx.stroke();
+          drawEatRing(ctx, parasiteUnit(s), p.hoverTimer);
           ctx.restore();
           p.hoverTimer -= 0.02;
         }
@@ -887,14 +889,7 @@ export class Trumpetfish {
         ctx.stroke();
       }
 
-      // Parasite Crustacean/Isopod Body
-      ctx.beginPath();
-      ctx.ellipse(0, 0, 2.2 * (s / 3.6), 1.5 * (s / 3.6), 0.2, 0, Math.PI * 2);
-      ctx.fillStyle = p.type === 'teeth' ? '#f59e0b' : '#ef4444';
-      ctx.fill();
-      ctx.strokeStyle = '#451a03';
-      ctx.lineWidth = 0.6;
-      ctx.stroke();
+      drawParasite(ctx, parasiteUnit(s), this.animTime, p.id, p.type === 'teeth');
 
       ctx.restore();
     }

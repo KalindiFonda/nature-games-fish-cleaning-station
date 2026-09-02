@@ -1,5 +1,6 @@
 import { Vector2D, Parasite } from '../types';
 import { lerp, clamp } from '../utils/math';
+import { parasiteUnit, drawParasite, drawEatRing, subsampleParasites } from './parasiteFx';
 
 export interface CleaningTargetSpot {
   id: string;
@@ -30,7 +31,7 @@ export class FrenchGrunt {
   public heading: number = Math.PI; // Facing left toward cleaning station in profile
 
   // Scale 2.82 (0.6x relative to Queen Triggerfish baseline 4.7)
-  public scale: number = 2.82;
+  public scale: number = 1.7;
 
   public state: 'entering' | 'stationary' | 'exiting' | 'exited' = 'entering';
   public entrySpeed: number = 2.7;
@@ -51,6 +52,11 @@ export class FrenchGrunt {
   // Parasites on mouth, head, and striped body
   public parasites: Parasite[] = [];
 
+  // Cavity gates driven by the ClientDirector (1 = open/eatable):
+  // gill parasites hide under the operculum flap, teeth behind the lips.
+  public gillOpen: number = 1;
+  public mouthGate: number = 1;
+
   constructor(canvasWidth: number, canvasHeight: number) {
     // Start offscreen to the right
     this.pos = {
@@ -63,6 +69,7 @@ export class FrenchGrunt {
     };
 
     this.initParasites();
+    this.parasites = subsampleParasites(this.parasites, 8);
   }
 
   /**
@@ -211,6 +218,8 @@ export class FrenchGrunt {
 
     for (const p of this.parasites) {
       if (p.removed) continue;
+      if (p.attachPart === 'operculum' && this.gillOpen < 0.6) continue;
+      if ((p.attachPart === 'upperTeeth' || p.attachPart === 'lowerTeeth') && this.mouthGate < 0.6) continue;
 
       const wPos = this.getParasiteWorldPos(p);
       let isEaten = false;
@@ -227,6 +236,7 @@ export class FrenchGrunt {
 
       if (isEaten) {
         p.removed = true;
+        p.hoverTimer = 1;
       }
     }
   }
@@ -897,43 +907,22 @@ export class FrenchGrunt {
    * Parasite Rendering & Interactive Station Glows
    */
   private renderParasites(ctx: CanvasRenderingContext2D) {
-    const s = this.scale;
-
+    const unit = parasiteUnit(this.scale);
     for (const p of this.parasites) {
-      if (p.removed) continue;
-      const lPos = this.getParasiteLocalPos(p);
-
+      const local = this.getParasiteLocalPos(p);
+      if (p.removed) {
+        if (p.hoverTimer > 0) {
+          ctx.save();
+          ctx.translate(local.x, local.y);
+          drawEatRing(ctx, unit, p.hoverTimer);
+          ctx.restore();
+          p.hoverTimer -= 0.02;
+        }
+        continue;
+      }
       ctx.save();
-      ctx.translate(lPos.x, lPos.y);
-
-      // Crustacean isopod parasite
-      ctx.beginPath();
-      ctx.ellipse(0, 0, 3.2 * (s / 4.5), 2.0 * (s / 4.5), 0.25, 0, Math.PI * 2);
-      ctx.fillStyle = '#ef4444'; // Coral red parasite
-      ctx.fill();
-      ctx.strokeStyle = '#991b1b';
-      ctx.lineWidth = 0.9;
-      ctx.stroke();
-
-      // Segmentation lines
-      ctx.strokeStyle = '#7f1d1d';
-      ctx.lineWidth = 0.6;
-      ctx.beginPath();
-      ctx.moveTo(-1.4 * (s / 4.5), -1.2 * (s / 4.5));
-      ctx.lineTo(-1.4 * (s / 4.5), 1.2 * (s / 4.5));
-      ctx.moveTo(0, -1.5 * (s / 4.5));
-      ctx.lineTo(0, 1.5 * (s / 4.5));
-      ctx.moveTo(1.4 * (s / 4.5), -1.2 * (s / 4.5));
-      ctx.lineTo(1.4 * (s / 4.5), 1.2 * (s / 4.5));
-      ctx.stroke();
-
-      // Subtle pulse glow
-      const glow = (Math.sin(this.animTime * 4 + p.id) + 1) * 0.5;
-      ctx.beginPath();
-      ctx.arc(0, 0, 5.0 * (s / 4.5), 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(254, 202, 202, ${0.15 + glow * 0.25})`;
-      ctx.fill();
-
+      ctx.translate(local.x, local.y);
+      drawParasite(ctx, unit, this.animTime, p.id, p.type === 'teeth');
       ctx.restore();
     }
   }

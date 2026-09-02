@@ -1,5 +1,6 @@
 import { Vector2D, Parasite } from '../types';
 import { lerp, clamp } from '../utils/math';
+import { parasiteUnit, drawParasite, drawEatRing, subsampleParasites } from './parasiteFx';
 
 export interface CleaningTargetSpot {
   id: string;
@@ -25,7 +26,7 @@ export class YellowtailGoatfish {
   public heading: number = Math.PI; // Facing left toward the cleaning station in profile
 
   // Scale 3.29 (0.7x relative to Queen Triggerfish baseline 4.7)
-  public scale: number = 3.29;
+  public scale: number = 2.0;
 
   public state: 'entering' | 'stationary' | 'exiting' | 'exited' = 'entering';
   public entrySpeed: number = 2.8;
@@ -47,6 +48,11 @@ export class YellowtailGoatfish {
   // Parasites on chin barbels, mouth, and silver/yellow body
   public parasites: Parasite[] = [];
 
+  // Cavity gates driven by the ClientDirector (1 = open/eatable):
+  // gill parasites hide under the operculum flap, teeth behind the lips.
+  public gillOpen: number = 1;
+  public mouthGate: number = 1;
+
   constructor(canvasWidth: number, canvasHeight: number) {
     // Start offscreen to the right
     this.pos = {
@@ -59,6 +65,7 @@ export class YellowtailGoatfish {
     };
 
     this.initParasites();
+    this.parasites = subsampleParasites(this.parasites, 10);
   }
 
   /**
@@ -203,6 +210,8 @@ export class YellowtailGoatfish {
 
     for (const p of this.parasites) {
       if (p.removed) continue;
+      if (p.attachPart === 'operculum' && this.gillOpen < 0.6) continue;
+      if ((p.attachPart === 'upperTeeth' || p.attachPart === 'lowerTeeth') && this.mouthGate < 0.6) continue;
 
       const wPos = this.getParasiteWorldPos(p);
       let isEaten = false;
@@ -219,6 +228,7 @@ export class YellowtailGoatfish {
 
       if (isEaten) {
         p.removed = true;
+        p.hoverTimer = 1;
       }
     }
   }
@@ -453,14 +463,24 @@ export class YellowtailGoatfish {
   }
 
   private renderParasites(ctx: CanvasRenderingContext2D) {
-    ctx.save();
-    ctx.fillStyle = '#451a03';
+    const unit = parasiteUnit(this.scale);
     for (const p of this.parasites) {
-      if (p.removed) continue;
       const local = this.getParasiteLocalPos(p);
-      ctx.fillRect(Math.round(local.x), Math.round(local.y), 2, 2);
+      if (p.removed) {
+        if (p.hoverTimer > 0) {
+          ctx.save();
+          ctx.translate(local.x, local.y);
+          drawEatRing(ctx, unit, p.hoverTimer);
+          ctx.restore();
+          p.hoverTimer -= 0.02;
+        }
+        continue;
+      }
+      ctx.save();
+      ctx.translate(local.x, local.y);
+      drawParasite(ctx, unit, this.animTime, p.id, p.type === 'teeth');
+      ctx.restore();
     }
-    ctx.restore();
   }
 
   /**

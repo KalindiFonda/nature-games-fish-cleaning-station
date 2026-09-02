@@ -18,6 +18,8 @@ export interface ClientFishInfo {
   state: 'entering' | 'stationary' | 'exiting' | 'exited' | 'waiting';
   elapsedSeconds: number;
   transitionCountdown: number;
+  patienceFrac?: number; // 0..1 patience remaining for the patience bar
+  isVisitor?: boolean; // challenge mode: passing trade, double value
   isVisible: boolean;
 }
 

@@ -1,5 +1,6 @@
 import { Vector2D, Parasite } from '../types';
 import { lerp, clamp } from '../utils/math';
+import { parasiteUnit, drawParasite, drawEatRing, subsampleParasites } from './parasiteFx';
 
 export interface CleaningTargetSpot {
   id: string;
@@ -13,7 +14,7 @@ export class Grouper {
   public heading: number = Math.PI; // Facing left toward the cleaner wrasse in profile
   
   // Scale 7.52 (1.6x relative to Queen Triggerfish baseline 4.7)
-  public scale: number = 7.52;
+  public scale: number = 4.5;
   
   public state: 'entering' | 'stationary' | 'exiting' | 'exited' = 'entering';
   public entrySpeed: number = 2.4;
@@ -35,6 +36,12 @@ export class Grouper {
   // Parasites to be cleaned
   public parasites: Parasite[] = [];
 
+  // Cavity gates driven by the ClientDirector (1 = open/eatable):
+  // gill parasites hide under the operculum flap, teeth behind the lips.
+  public gillOpen: number = 1;
+  public mouthGate: number = 1;
+  public gillWiggle: number = 0; // pre-clamp warning tremor on the flap
+
   constructor(canvasWidth: number, canvasHeight: number) {
     // Start offscreen to the right
     this.pos = {
@@ -47,6 +54,7 @@ export class Grouper {
     };
 
     this.initParasites();
+    this.parasites = subsampleParasites(this.parasites, 16);
   }
 
   /**
@@ -303,6 +311,8 @@ export class Grouper {
 
     for (const p of this.parasites) {
       if (p.removed) continue;
+      if (p.attachPart === 'operculum' && this.gillOpen < 0.6) continue;
+      if ((p.attachPart === 'upperTeeth' || p.attachPart === 'lowerTeeth') && this.mouthGate < 0.6) continue;
 
       const wPos = this.getParasiteWorldPos(p);
       let isEaten = false;
@@ -323,6 +333,7 @@ export class Grouper {
 
       if (isEaten) {
         p.removed = true;
+        p.hoverTimer = 1;
       }
     }
   }
@@ -610,14 +621,24 @@ export class Grouper {
    * Render 2-pixel brown parasite marks across teeth and body
    */
   private renderParasites(ctx: CanvasRenderingContext2D) {
-    ctx.save();
-    ctx.fillStyle = '#451a03';
+    const unit = parasiteUnit(this.scale);
     for (const p of this.parasites) {
-      if (p.removed) continue;
       const local = this.getParasiteLocalPos(p);
-      ctx.fillRect(Math.round(local.x), Math.round(local.y), 2, 2);
+      if (p.removed) {
+        if (p.hoverTimer > 0) {
+          ctx.save();
+          ctx.translate(local.x, local.y);
+          drawEatRing(ctx, unit, p.hoverTimer);
+          ctx.restore();
+          p.hoverTimer -= 0.02;
+        }
+        continue;
+      }
+      ctx.save();
+      ctx.translate(local.x, local.y);
+      drawParasite(ctx, unit, this.animTime, p.id, p.type === 'teeth');
+      ctx.restore();
     }
-    ctx.restore();
   }
 
   /**
@@ -883,7 +904,14 @@ export class Grouper {
     ctx.fillStyle = '#450a0a';
     ctx.fill();
 
-    // Crimson Gill Arch visible inside slit
+    // Two crimson gill arches inside the slit - a darker one deeper in,
+    // a brighter one in front (real gills stack in rows)
+    ctx.beginPath();
+    ctx.moveTo(-5 * s - flare * 0.5, -11 * s);
+    ctx.quadraticCurveTo(0 * s - flare * 0.7, -3 * s, -2 * s - flare * 0.5, 5 * s);
+    ctx.strokeStyle = '#9f1a24';
+    ctx.lineWidth = 1.6 * (s / 3.6);
+    ctx.stroke();
     ctx.beginPath();
     ctx.moveTo(-7 * s - flare * 0.6, -12 * s);
     ctx.quadraticCurveTo(-2 * s - flare * 0.8, -3 * s, -4 * s - flare * 0.6, 6 * s);
@@ -891,7 +919,13 @@ export class Grouper {
     ctx.lineWidth = 1.8 * (s / 3.6);
     ctx.stroke();
 
-    // Smooth Opercular Flap Outer Plate
+    // Smooth Opercular Flap Outer Plate - hinged at its top rear so the
+    // director can lift it open (gillOpen), with the warning wiggle
+    const lift = Math.max(0, this.gillOpen) * 0.25;
+    ctx.save();
+    ctx.translate(-19 * s, -13 * s);
+    ctx.rotate(-Math.max(0, lift));
+    ctx.translate(19 * s, 13 * s);
     ctx.beginPath();
     ctx.moveTo(-18 * s, -14 * s);
     ctx.quadraticCurveTo(-8 * s - flare * 0.8, -14 * s, -3 * s - flare, -4 * s);
@@ -908,6 +942,7 @@ export class Grouper {
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
     ctx.lineWidth = 0.8;
     ctx.stroke();
+    ctx.restore();
 
     ctx.restore();
   }
@@ -937,24 +972,31 @@ export class Grouper {
     ];
 
     ctx.save();
+    // Coral-hind style freckling: each anchor becomes a small cluster of
+    // flat two-tone dots - patterned skin, not raised beads (and clearly
+    // distinct from the parasites, which are ellipses with pale halos).
+    let i = 0;
     for (const spot of spots) {
-      // Outer azure halo
-      ctx.beginPath();
-      ctx.arc(spot.x, spot.y, spot.r, 0, Math.PI * 2);
-      ctx.fillStyle = '#0284c7';
-      ctx.fill();
-
-      // Inner electric cyan core
-      ctx.beginPath();
-      ctx.arc(spot.x, spot.y, spot.r * 0.7, 0, Math.PI * 2);
-      ctx.fillStyle = '#38bdf8';
-      ctx.fill();
-
-      // Specular highlight center
-      ctx.beginPath();
-      ctx.arc(spot.x - spot.r * 0.2, spot.y - spot.r * 0.2, spot.r * 0.3, 0, Math.PI * 2);
-      ctx.fillStyle = '#ffffff';
-      ctx.fill();
+      i++;
+      const jit = Math.sin(i * 12.9898) * 43758.5453;
+      const j = jit - Math.floor(jit);
+      // Satellites stay within ~one bead-radius of the anchor so the
+      // cluster never spills past the body silhouette.
+      const cluster = [
+        { x: spot.x, y: spot.y, r: spot.r * 0.5 },
+        { x: spot.x + (0.55 + j * 0.35) * spot.r, y: spot.y + (0.3 - j * 0.75) * spot.r, r: spot.r * 0.3 },
+        { x: spot.x - (0.45 + j * 0.3) * spot.r, y: spot.y - (0.2 + j * 0.55) * spot.r, r: spot.r * 0.34 },
+      ];
+      for (const d of cluster) {
+        ctx.beginPath();
+        ctx.arc(d.x, d.y, d.r, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(3, 105, 161, 0.8)';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(d.x, d.y, d.r * 0.6, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(125, 211, 252, 0.9)';
+        ctx.fill();
+      }
     }
     ctx.restore();
   }
