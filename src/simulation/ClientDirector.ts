@@ -6,7 +6,7 @@ import { Trumpetfish } from './Trumpetfish';
 import { SpottedMoray } from './SpottedMoray';
 import { WhitespottedFilefish } from './WhitespottedFilefish';
 import { FrenchGrunt } from './FrenchGrunt';
-import { ClientFishSpecies, Vector2D } from '../types';
+import { ClientFishSpecies, Vector2D, Parasite } from '../types';
 
 export type ClientFish =
   | Grouper
@@ -34,17 +34,6 @@ export type ClientFish =
 type Role = 'active' | 'waiting';
 type Phase = 'entering' | 'settled' | 'leaving';
 export type LeaveReason = 'cleaned' | 'impatient' | 'skipped';
-
-export interface ChallengeInfo {
-  running: boolean;
-  over: boolean;
-  countdown: number; // 3..0 pre-shift countdown; 0 = live
-  timeLeft: number; // seconds
-  score: number; // nutrition points
-  cleanedClients: number;
-  parasitesEaten: number;
-  mucusBites: number;
-}
 
 export interface Cavity {
   open: number; // 0 closed .. 1 fully open
@@ -111,9 +100,6 @@ export interface ClientSlot {
   // ~7s of work, flutter-warns, chomps, rests briefly, reopens on return
   mouthWork: number;
   mouthLock: number;
-  // Challenge mode: visitors are passing trade - impatient, worth double
-  visitor: boolean;
-  lastTeethRem: number; // teeth-parasite count last frame (zone scoring)
   // Mirrored fish face RIGHT (the canvas flips them); they enter from the
   // left, wait on the left, and exit rightward. Fixed for the fish's whole
   // visit so it never snap-flips mid-water. The moray is never mirrored.
@@ -144,7 +130,7 @@ const ALL_SPECIES: ClientFishSpecies[] = [
   'french_grunt',
 ];
 
-const MAX_CLIENTS = 3; // 1 active + up to 2 waiting
+const MAX_WAITING = 3; // up to 3 waiting in queue spots
 const WAIT_SCALE = 0.5; // waiting clients read as "further back"
 const WAIT_ALPHA = 0.45;
 const PATIENCE_TOPUP = 3; // seconds refunded per parasite eaten (partial)
@@ -181,7 +167,7 @@ const MOUTH_CAVITY_SPECIES = new Set<ClientFishSpecies>([
   'french_grunt',
 ]);
 const PROMOTE_HOLD = 0.7; // seconds a cleaner must linger to call a client over
-const SHIMMY_SECONDS = 1.3;
+const SHIMMY_SECONDS = 2.6; // Doubled celebration sparkle time - fish stays in place celebrating
 
 function createClientFish(species: ClientFishSpecies, w: number, h: number): ClientFish {
   switch (species) {
@@ -204,77 +190,13 @@ function createClientFish(species: ClientFishSpecies, w: number, h: number): Cli
   }
 }
 
-const CHALLENGE_SECONDS = 180;
-const SCORE_BODY = 10; // flank/fin parasite
-const SCORE_DELICATE = 20; // teeth (and other gated) parasites
-const SCORE_MUCUS = 50; // one stolen mouthful of mucus
-const MUCUS_HOLD = 0.35; // seconds of holding Space on the flank to bite
-const MUCUS_PATIENCE_COST = 9;
-
 export class ClientDirector {
   slots: ClientSlot[] = [];
   onClientCleaned: (() => void) | null = null;
-  mode: 'reef' | 'challenge' = 'reef';
-  private ch: ChallengeInfo = {
-    running: false,
-    over: false,
-    countdown: 0,
-    timeLeft: CHALLENGE_SECONDS,
-    score: 0,
-    cleanedClients: 0,
-    parasitesEaten: 0,
-    mucusBites: 0,
-  };
-  private biteCharge = 0;
-  private biteCooldown = 0;
-  private primeSpawns = 0; // spawns forced during the challenge countdown
+  public patiencePaused: boolean = false;
   // Clamp events (unmirrored coords) for the canvas: where to burst
   // bubbles, and exactly which cleaners got caught and must be spat out
   private clampEvents: { x: number; y: number; hitWrasse: boolean; hitGoby: boolean }[] = [];
-  // Mucus-bite events (unmirrored) for the canvas's golden burst + popup
-  private mucusEvents: { x: number; y: number; value: number }[] = [];
-
-  startChallenge() {
-    this.mode = 'challenge';
-    this.ch = {
-      running: true,
-      over: false,
-      countdown: 3,
-      timeLeft: CHALLENGE_SECONDS,
-      score: 0,
-      cleanedClients: 0,
-      parasitesEaten: 0,
-      mucusBites: 0,
-    };
-    this.biteCharge = 0;
-    this.biteCooldown = 0;
-    // The client being serviced swims off while the countdown runs -
-    // the shift starts with a fresh station, and the next client is
-    // already on its way in
-    this.skipActive();
-    // Fresh clients swim in DURING the countdown so the shift starts staffed
-    this.primeSpawns = 2;
-    this.spawnCooldown = 0;
-  }
-
-  stopChallenge() {
-    this.mode = 'reef';
-    this.ch.running = false;
-  }
-
-  challengeInfo(): ChallengeInfo {
-    return { ...this.ch };
-  }
-
-  drainMucusEvents(): { x: number; y: number; value: number }[] {
-    const ev = this.mucusEvents;
-    this.mucusEvents = [];
-    return ev;
-  }
-
-  private get scoring(): boolean {
-    return this.mode === 'challenge' && this.ch.running && !this.ch.over && this.ch.countdown <= 0;
-  }
 
   drainClampEvents(): { x: number; y: number; hitWrasse: boolean; hitGoby: boolean }[] {
     const ev = this.clampEvents;
@@ -330,8 +252,10 @@ export class ClientDirector {
   }
 
   private deck: ClientFishSpecies[] = [];
-  private spawnCooldown = 1.5; // first client arrives almost immediately
+  private spawnCooldown = 1.0; // first client arrives almost immediately
+  private emptyQueueTimer = 0;
   private time = 0;
+  private savedParasites = new Map<ClientFishSpecies, Parasite[]>();
 
   // Waiting spots sit above and AHEAD of where the fish will swim next, so
   // a promoted client always moves forward into service: spots 0-1 (upper
@@ -366,7 +290,7 @@ export class ClientDirector {
     };
   }
 
-  private drawSpecies(activeBusy: boolean): ClientFishSpecies | null {
+  private drawSpecies(): ClientFishSpecies | null {
     if (this.deck.length === 0) {
       this.deck = [...ALL_SPECIES].sort(() => Math.random() - 0.5);
     }
@@ -374,9 +298,6 @@ export class ClientDirector {
     for (let i = 0; i < this.deck.length; i++) {
       const sp = this.deck[i];
       if (onScreen.has(sp)) continue;
-      // The moray can only appear when the station itself is free: it rises
-      // from its crevice straight into service and never waits in open water.
-      if (sp === 'spotted_moray' && activeBusy) continue;
       this.deck.splice(i, 1);
       return sp;
     }
@@ -398,51 +319,30 @@ export class ClientDirector {
   }
 
   private spawn(w: number, h: number) {
-    const hasActive = this.slots.some((s) => s.role === 'active');
-    const waitingCount = this.slots.filter((s) => s.role === 'waiting').length;
-    if (hasActive && waitingCount >= MAX_CLIENTS - 1) return;
+    const waitingSlots = this.slots.filter((s) => s.role === 'waiting' && s.phase !== 'leaving');
+    if (waitingSlots.length >= MAX_WAITING) return;
 
-    const species = this.drawSpecies(hasActive);
+    const species = this.drawSpecies();
     if (!species) return;
 
     const fish = createClientFish(species, w, h);
     const baseScale = fish.scale;
     const isMoray = species === 'spotted_moray';
 
-    const role: Role = hasActive ? 'waiting' : 'active';
-    let waitSpot = -1;
-    let mirrored = false;
-    let target: Vector2D;
-    if (role === 'active') {
-      mirrored = !isMoray && Math.random() < 0.45;
-      target = isMoray ? { ...fish.pos } : this.stationPos(species, baseScale, w, h, mirrored);
-    } else {
-      const used = new Set(this.slots.map((s) => s.waitSpot));
-      const free = [0, 1, 2, 3].filter((i) => !used.has(i));
-      waitSpot = free[Math.floor(Math.random() * free.length)];
-      mirrored = waitSpot >= 2;
-      target = this.waitSpots(w, h)[waitSpot];
+    if (species === 'french_grunt') {
+      this.savedParasites.delete('french_grunt');
+    }
+    const saved = species !== 'french_grunt' ? this.savedParasites.get(species) : undefined;
+    if (saved && saved.length > 0) {
+      fish.parasites = saved.map((p, idx) => ({
+        ...p,
+        id: idx + 1,
+        removed: false,
+        hoverTimer: 0,
+      }));
     }
 
-    if (isMoray) {
-      // The moray's rear body trails behind the reef wall; drop parasites
-      // that would render hidden inside the rock (same slope geometry as
-      // Reef.render: ridge from (0, 0.68h) descending 30° to the floor).
-      const startY = h * 0.68;
-      const bottomX = (h - startY) * 1.732;
-      const moray = fish as SpottedMoray;
-      moray.parasites = moray.parasites.filter((p) => {
-        const lp = moray.getParasiteLocalPos(p);
-        const x = moray.targetPos.x + lp.x;
-        const y = moray.targetPos.y + lp.y;
-        const ridgeY = startY + (h - startY) * (x / bottomX) - 14;
-        return !(x < bottomX && y > ridgeY);
-      });
-    }
-
-    const pos = isMoray ? { ...fish.pos } : this.entryPoint(w, h, target, mirrored);
-
-    // Fixed cavity anchors from the species' full parasite layout
+    // Helper for fixed cavity anchors from the species' full parasite layout
     const anchorFor = (match: (ap: string) => boolean): Vector2D | null => {
       let cx = 0;
       let cy = 0;
@@ -456,16 +356,82 @@ export class ClientDirector {
       }
       return n > 0 ? { x: cx / n, y: cy / n } : null;
     };
+
+    if (isMoray) {
+      const moray = fish as SpottedMoray;
+      moray.setMode('queue');
+
+      // The moray's rear body trails behind the reef wall; drop parasites
+      // that would render hidden inside the rock (same slope geometry as
+      // Reef.render: ridge from (0, 0.68h) descending 30° to the floor).
+      if (!saved || saved.length === 0) {
+        const startY = h * 0.68;
+        const bottomX = (h - startY) * 1.732;
+        moray.parasites = moray.parasites.filter((p) => {
+          const lp = moray.getParasiteLocalPos(p);
+          const x = moray.targetPos.x + lp.x;
+          const y = moray.targetPos.y + lp.y;
+          const ridgeY = startY + (h - startY) * (x / bottomX) - 14;
+          return !(x < bottomX && y > ridgeY);
+        });
+      }
+
+      const cavGill = freshCavity();
+      cavGill.anchorLocal = anchorFor((ap) => ap === 'operculum');
+      const cavMouth = freshCavity();
+      cavMouth.anchorLocal = anchorFor((ap) => ap === 'upperTeeth' || ap === 'lowerTeeth');
+
+      this.slots.push({
+        fish,
+        species,
+        role: 'waiting',
+        phase: 'entering',
+        leaveReason: null,
+        pos: { ...fish.pos },
+        target: { ...fish.pos },
+        baseScale,
+        displayScale: baseScale,
+        targetScale: baseScale,
+        alpha: WAIT_ALPHA,
+        targetAlpha: WAIT_ALPHA,
+        patience: SPECIES_PATIENCE[species],
+        patienceMax: SPECIES_PATIENCE[species],
+        lastRemoved: 0,
+        bobPhase: Math.random() * Math.PI * 2,
+        waitSpot: -1,
+        promoteHold: 0,
+        shimmyT: 0,
+        exitVel: 0,
+        ageSec: 0,
+        lastSpeed: 0,
+        mirrored: false,
+        transFromScale: baseScale,
+        transFromAlpha: WAIT_ALPHA,
+        transDist: 0,
+        cavGill,
+        cavMouth,
+        joltT: 0,
+        mouthWork: 0,
+        mouthLock: 0,
+      });
+      return;
+    }
+
+    // All other spawned fish enter the queue as waiting clients
+    const role: Role = 'waiting';
+    const used = new Set(this.slots.map((s) => s.waitSpot));
+    const free = [0, 1, 2, 3].filter((i) => !used.has(i));
+    const waitSpot = free.length > 0 ? free[Math.floor(Math.random() * free.length)] : 0;
+    const mirrored = waitSpot >= 2;
+    const target = this.waitSpots(w, h)[waitSpot];
+    const pos = this.entryPoint(w, h, target, mirrored);
+
     const cavGill = freshCavity();
     cavGill.anchorLocal = anchorFor((ap) => ap === 'operculum');
     const cavMouth = freshCavity();
     cavMouth.anchorLocal = MOUTH_CAVITY_SPECIES.has(species)
       ? anchorFor((ap) => ap === 'upperTeeth' || ap === 'lowerTeeth')
       : null;
-
-    // Visitors (challenge only): passing trade - 40% less patience, double
-    // nutrition value, first in your triage thinking
-    const visitor = this.mode === 'challenge' && Math.random() < 0.35;
 
     this.slots.push({
       fish,
@@ -476,12 +442,12 @@ export class ClientDirector {
       pos,
       target,
       baseScale,
-      displayScale: role === 'active' ? baseScale : baseScale * WAIT_SCALE,
-      targetScale: role === 'active' ? baseScale : baseScale * WAIT_SCALE,
-      alpha: role === 'active' ? 1 : 0.4,
-      targetAlpha: role === 'active' ? 1 : WAIT_ALPHA,
-      patience: SPECIES_PATIENCE[species] * (visitor ? 0.6 : 1),
-      patienceMax: SPECIES_PATIENCE[species] * (visitor ? 0.6 : 1),
+      displayScale: baseScale * WAIT_SCALE,
+      targetScale: baseScale * WAIT_SCALE,
+      alpha: 0.4,
+      targetAlpha: WAIT_ALPHA,
+      patience: SPECIES_PATIENCE[species],
+      patienceMax: SPECIES_PATIENCE[species],
       lastRemoved: 0,
       bobPhase: Math.random() * Math.PI * 2,
       waitSpot,
@@ -491,77 +457,128 @@ export class ClientDirector {
       ageSec: 0,
       lastSpeed: 0,
       mirrored,
-      transFromScale: role === 'active' ? baseScale : baseScale * WAIT_SCALE,
-      transFromAlpha: role === 'active' ? 1 : 0.4,
+      transFromScale: baseScale * WAIT_SCALE,
+      transFromAlpha: 0.4,
       transDist: 0,
       cavGill,
       cavMouth,
       joltT: 0,
       mouthWork: 0,
       mouthLock: 0,
-      visitor,
-      lastTeethRem: fish.getParasiteStats().teethRemaining,
     });
   }
 
-  private beginLeave(slot: ClientSlot, reason: LeaveReason) {
+  public beginLeave(slot: ClientSlot, reason: LeaveReason) {
     if (slot.phase === 'leaving') return;
     slot.phase = 'leaving';
     slot.leaveReason = reason;
     slot.shimmyT = reason === 'cleaned' ? SHIMMY_SECONDS : 0;
     slot.exitVel = 1.2;
     if (slot.species === 'spotted_moray') {
-      slot.fish.startExit(); // native retract into the crevice
+      if (slot.shimmyT <= 0) {
+        slot.fish.startExit(); // native retract into the crevice
+      }
     }
     if (reason === 'cleaned' && slot.role === 'active') {
-      if (this.scoring) this.ch.cleanedClients++;
       if (this.onClientCleaned) this.onClientCleaned();
+    }
+
+    // Persist unremoved parasites or clear when completely cleaned
+    const stats = slot.fish.getParasiteStats();
+    if (stats.remaining > 0 && slot.species !== 'french_grunt') {
+      const remainingParasites = slot.fish.parasites
+        .filter((p) => !p.removed)
+        .map((p) => ({ ...p, hoverTimer: 0 }));
+      this.savedParasites.set(slot.species, remainingParasites);
+    } else {
+      this.savedParasites.delete(slot.species);
     }
   }
 
-  private promote(slot: ClientSlot, w: number, h: number) {
+  public promote(slot: ClientSlot, w: number, h: number) {
+    // Invariant: only one fish can be active at the cleaning station
+    for (const s of this.slots) {
+      if (s !== slot && s.role === 'active' && s.phase !== 'leaving') {
+        this.beginLeave(s, 'skipped');
+      }
+    }
     slot.role = 'active';
     slot.waitSpot = -1;
     slot.promoteHold = 0;
-    slot.target = this.stationPos(slot.species, slot.baseScale, w, h, slot.mirrored);
-    slot.targetScale = slot.baseScale;
-    slot.targetAlpha = 1;
-    slot.transFromScale = slot.displayScale;
-    slot.transFromAlpha = slot.alpha;
-    slot.transDist = Math.hypot(slot.target.x - slot.pos.x, slot.target.y - slot.pos.y);
-    if (slot.phase === 'settled') slot.phase = 'entering';
+    if (slot.species === 'spotted_moray') {
+      const moray = slot.fish as SpottedMoray;
+      moray.setMode('active');
+      slot.target = { ...moray.targetPos };
+      slot.targetScale = slot.baseScale;
+      slot.targetAlpha = 1;
+      slot.phase = 'entering';
+    } else {
+      slot.target = this.stationPos(slot.species, slot.baseScale, w, h, slot.mirrored);
+      slot.targetScale = slot.baseScale;
+      slot.targetAlpha = 1;
+      slot.transFromScale = slot.displayScale;
+      slot.transFromAlpha = slot.alpha;
+      slot.transDist = Math.hypot(slot.target.x - slot.pos.x, slot.target.y - slot.pos.y);
+      if (slot.phase === 'settled') slot.phase = 'entering';
+    }
+    slot.patience = 10;
+    slot.patienceMax = 10;
+    slot.lastRemoved = slot.fish.getParasiteStats().removed;
+  }
+
+  /** Send active client away - does NOT return to queue */
+  public dismissActive(reason: LeaveReason = 'skipped') {
+    const a = this.active();
+    if (a) this.beginLeave(a, reason);
+  }
+
+  /** Find waiting client near a given world point (cleaner position or mouse) */
+  public findWaitingClientNear(point: Vector2D): ClientSlot | null {
+    let bestSlot: ClientSlot | null = null;
+    let minDist = Infinity;
+    for (const slot of this.slots) {
+      if (slot.role !== 'waiting' || slot.phase === 'leaving') continue;
+      const isMoray = slot.species === 'spotted_moray';
+      const isGrunt = slot.species === 'french_grunt';
+      const s = slot.displayScale;
+      let fx = slot.fish.pos.x;
+      let fy = slot.fish.pos.y;
+      let rx = Math.max(90, 50 * s);
+      let ry = Math.max(50, 30 * s);
+      if (isMoray) {
+        const cosH = Math.cos(-0.32);
+        const sinH = Math.sin(-0.32);
+        fx += 28 * s * cosH;
+        fy += 28 * s * sinH;
+        rx = 110;
+        ry = 80;
+      } else if (isGrunt) {
+        // Group of 3 grunts covers a wider school area
+        rx = Math.max(120, 65 * s);
+        ry = Math.max(85, 48 * s);
+      }
+      const dx = point.x - fx;
+      const dy = point.y - fy;
+      const dNorm = (dx * dx) / (rx * rx) + (dy * dy) / (ry * ry);
+      if (dNorm <= 1.0) {
+        const d = Math.hypot(dx, dy);
+        if (d < minDist) {
+          minDist = d;
+          bestSlot = slot;
+        }
+      }
+    }
+    return bestSlot;
   }
 
   private demote(slot: ClientSlot, w: number, h: number) {
-    // The moray cannot wait in open water - bumped from the station, it
-    // simply retracts into its crevice.
-    if (slot.species === 'spotted_moray') {
-      this.beginLeave(slot, 'impatient');
-      return;
-    }
-    // A demoted fish keeps facing the way it faces, so it may only take a
-    // waiting spot on its own side; with none free it just leaves.
-    const used = new Set(this.slots.filter((s) => s !== slot).map((s) => s.waitSpot));
-    const side = slot.mirrored ? [2, 3] : [0, 1];
-    const spot = side.find((i) => !used.has(i)) ?? -1;
-    if (spot === -1) {
-      this.beginLeave(slot, 'impatient');
-      return;
-    }
-    slot.role = 'waiting';
-    slot.waitSpot = spot;
-    slot.target = this.waitSpots(w, h)[spot];
-    slot.targetScale = slot.baseScale * WAIT_SCALE;
-    slot.targetAlpha = WAIT_ALPHA;
-    slot.transFromScale = slot.displayScale;
-    slot.transFromAlpha = slot.alpha;
-    slot.transDist = Math.hypot(slot.target.x - slot.pos.x, slot.target.y - slot.pos.y);
-    slot.phase = 'entering';
+    // Bumped from the station, fish always leaves (never goes to queue)
+    this.beginLeave(slot, 'impatient');
   }
 
-  /** The client currently at the station, if any. */
+  /** The client currently active at the station, if any. */
   active(): ClientSlot | null {
-    return this.slots.find((s) => s.role === 'active') ?? null;
+    return this.slots.find((s) => s.role === 'active' && s.phase !== 'leaving') ?? null;
   }
 
   /** Send the active client on its way (the Next Fish button). */
@@ -580,48 +597,33 @@ export class ClientDirector {
     gobiMouth: Vector2D | null,
     wrasseScale: number,
     gobiScale: number,
-    biteMouth: Vector2D | null = null, // the player's selected cleaner mouth
-    biteHeld: boolean = false, // Space held = trying to bite mucus
-    massageHeld: boolean = false, // M held = massaging
     autoMouth: Vector2D | null = null, // the OTHER cleaner - preps the queue
     autoScale: number = 0.65
   ) {
     const dtSec = dt / 60;
     this.time += dtSec;
 
-    if (this.mode === 'challenge' && this.ch.running && !this.ch.over) {
-      if (this.ch.countdown > 0) {
-        this.ch.countdown = Math.max(0, this.ch.countdown - dtSec);
-      } else {
-        this.ch.timeLeft -= dtSec;
-        if (this.ch.timeLeft <= 0) {
-          this.ch.timeLeft = 0;
-          this.ch.over = true;
-        }
-      }
-    }
-    this.biteCooldown = Math.max(0, this.biteCooldown - dtSec);
+    // --- spawning & empty queue guarantee ---
+    const waitingSlots = this.slots.filter((s) => s.role === 'waiting' && s.phase !== 'leaving');
+    const waitingCount = waitingSlots.length;
 
-    // --- spawning ---
+    if (waitingCount === 0) {
+      this.emptyQueueTimer += dtSec;
+    } else {
+      this.emptyQueueTimer = 0;
+    }
+
     this.spawnCooldown -= dtSec;
-    if (this.primeSpawns > 0 && this.slots.length < MAX_CLIENTS) {
-      this.spawn(w, h);
-      this.primeSpawns--;
-      this.spawnCooldown = 2;
-    }
-    if (this.spawnCooldown <= 0 && this.slots.length < MAX_CLIENTS) {
-      this.spawn(w, h);
-      // Challenge shifts run a busier reef
-      this.spawnCooldown =
-        this.mode === 'challenge' ? 4 + Math.random() * 5 : 7 + Math.random() * 9;
-    }
 
-    // If the station is free, call over whoever has waited longest.
-    if (!this.slots.some((s) => s.role === 'active' && s.phase !== 'leaving')) {
-      const waiting = this.slots
-        .filter((s) => s.role === 'waiting' && s.phase !== 'leaving')
-        .sort((a, b) => b.ageSec - a.ageSec)[0];
-      if (waiting) this.promote(waiting, w, h);
+    // Guaranteed: queue must never remain empty for more than 10 seconds
+    const forceEmptyQueueSpawn = waitingCount === 0 && this.emptyQueueTimer >= 10;
+
+    if ((this.spawnCooldown <= 0 || forceEmptyQueueSpawn) && waitingCount < MAX_WAITING) {
+      this.spawn(w, h);
+      this.spawnCooldown = 4 + Math.random() * 5;
+      if (waitingCount === 0) {
+        this.emptyQueueTimer = 0;
+      }
     }
 
     for (const slot of this.slots) {
@@ -648,15 +650,18 @@ export class ClientDirector {
       // --- movement (director-owned, except the moray's native crevice rig) ---
       let moved = 0;
       if (slot.phase === 'leaving' && slot.shimmyT > 0) {
-        // Brief happy pause on a fully-cleaned departure - the canvas draws
-        // eye sparkles over it - then off it swims.
+        // Happy pause on a fully-cleaned departure - sparkles glitter all over the fish.
+        // The fish stays in place until celebration finishes, then swims away or retracts.
         slot.shimmyT -= dtSec;
+        if (isMoray && slot.shimmyT <= 0) {
+          slot.fish.startExit();
+        }
       } else if (slot.phase === 'leaving') {
         if (!isMoray) {
-          // Forward exit: the fish continues the way it faces and off screen.
-          slot.exitVel = Math.min(6.5, slot.exitVel + 0.05 * dt);
+          // Forward exit: smoothly swim off screen without jerky distortion
+          slot.exitVel = Math.min(4.8, slot.exitVel + 0.035 * dt);
           slot.pos.x += (slot.mirrored ? 1 : -1) * slot.exitVel * dt;
-          slot.pos.y += Math.sin(slot.bobPhase) * 0.4 * dt;
+          slot.pos.y += Math.sin(slot.bobPhase * 0.5) * 0.15 * dt;
           moved = slot.exitVel * dt;
         }
       } else {
@@ -678,18 +683,25 @@ export class ClientDirector {
         slot.pos.y += dy;
         moved = Math.hypot(dx, dy);
         if (slot.phase === 'entering') {
-          const d = Math.hypot(slot.target.x - slot.pos.x, slot.target.y - slot.pos.y);
-          if (d < 6) slot.phase = 'settled';
+          const isMorayStationary = isMoray && (fish as SpottedMoray).state === 'stationary';
+          const arrived = !isMoray && Math.hypot(slot.target.x - slot.pos.x, slot.target.y - slot.pos.y) < 6;
+          if (arrived || isMorayStationary) {
+            slot.phase = 'settled';
+            if (slot.role === 'active') {
+              slot.patience = 10;
+              slot.patienceMax = 10;
+              slot.lastRemoved = slot.fish.getParasiteStats().removed;
+            }
+          }
         }
       }
       slot.lastSpeed = dt > 0 ? moved / dt : 0;
 
-      // Advance the fish's internal animation (breath, fins, mouth, moray
-      // extension), then stamp the director's position over its own. While
-      // actually traveling, run the animation double-speed so tail and fins
-      // visibly beat with the effort.
+      // Advance the fish's internal animation (breath, fins, mouth, moray extension)
       fish.update(w, h, dt);
-      if (!isMoray && slot.lastSpeed > 1.2) fish.update(w, h, dt);
+      if (!isMoray && slot.lastSpeed > 1.2 && slot.phase !== 'leaving') {
+        fish.update(w, h, dt * 0.4);
+      }
       if (!isMoray) {
         // Idle bob while parked - waiting clients ride the water visibly,
         // the active client more gently (it's being worked on).
@@ -810,58 +822,15 @@ export class ClientDirector {
         fish.updateParasites(rWrasse, rGobi, dt, wrasseScale, gobiScale);
         const stats = fish.getParasiteStats();
 
-        // Each parasite eaten tops patience back up a little (not fully)
+        // If either cleaner fish eats a parasite, add three seconds to the timer
         if (stats.removed > slot.lastRemoved) {
           const eaten = stats.removed - slot.lastRemoved;
-          slot.patience = Math.min(slot.patienceMax, slot.patience + eaten * PATIENCE_TOPUP);
-          if (this.scoring) {
-            const teethEaten = Math.max(0, slot.lastTeethRem - stats.teethRemaining);
-            const bodyEaten = Math.max(0, eaten - teethEaten);
-            const mult = slot.visitor ? 2 : 1;
-            this.ch.score += (teethEaten * SCORE_DELICATE + bodyEaten * SCORE_BODY) * mult;
-            this.ch.parasitesEaten += eaten;
-          }
+          slot.patience += eaten * 3;
+          slot.patienceMax = Math.max(slot.patienceMax, slot.patience);
         }
         slot.lastRemoved = stats.removed;
-        slot.lastTeethRem = stats.teethRemaining;
 
-        // Mucus temptation (challenge): hold your cleaner against the
-        // client's body to steal a mouthful - big points, big jolt
-        if (this.scoring && biteMouth && biteHeld && !massageHeld && this.biteCooldown <= 0) {
-          const rBite = slot.mirrored
-            ? { x: 2 * fish.pos.x - biteMouth.x, y: biteMouth.y }
-            : biteMouth;
-          if (fish.hitTest(rBite)) {
-            this.biteCharge += dtSec;
-            if (this.biteCharge >= MUCUS_HOLD) {
-              this.biteCharge = 0;
-              this.biteCooldown = 1.6;
-              const mult = slot.visitor ? 2 : 1;
-              this.ch.score += SCORE_MUCUS * mult;
-              this.ch.mucusBites++;
-              slot.patience -= MUCUS_PATIENCE_COST;
-              slot.joltT = 0.55;
-              this.mucusEvents.push({ x: rBite.x, y: rBite.y, value: SCORE_MUCUS * mult });
-            }
-          } else {
-            this.biteCharge = Math.max(0, this.biteCharge - dtSec * 2);
-          }
-        } else if (!biteHeld) {
-          this.biteCharge = Math.max(0, this.biteCharge - dtSec * 2);
-        }
-
-        // Massage (challenge): soothe the client to rebuild its patience -
-        // costs you clock, earns you nothing... directly
-        if (this.mode === 'challenge' && massageHeld && biteMouth) {
-          const rTouch = slot.mirrored
-            ? { x: 2 * fish.pos.x - biteMouth.x, y: biteMouth.y }
-            : biteMouth;
-          if (fish.hitTest(rTouch)) {
-            slot.patience = Math.min(slot.patienceMax, slot.patience + dtSec * 3);
-          }
-        }
-
-        if (slot.phase === 'settled') slot.patience -= dtSec;
+        if (slot.phase === 'settled' && !this.patiencePaused) slot.patience -= dtSec;
 
         if (stats.remaining === 0) {
           this.beginLeave(slot, 'cleaned');
@@ -889,21 +858,10 @@ export class ClientDirector {
             );
           }
           slot.lastRemoved = wStats.removed;
-          slot.lastTeethRem = wStats.teethRemaining;
         }
-        if (slot.phase === 'settled') slot.patience -= dtSec;
+        if (slot.phase === 'settled' && !this.patiencePaused) slot.patience -= dtSec;
         if (slot.patience <= 0) {
           this.beginLeave(slot, 'impatient');
-        } else {
-          const near = cleanerHeads.some(
-            (c) => Math.hypot(c.x - slot.pos.x, c.y - slot.pos.y) < 60 + 40 * (slot.displayScale / slot.baseScale)
-          );
-          slot.promoteHold = near ? slot.promoteHold + dtSec : Math.max(0, slot.promoteHold - dtSec * 2);
-          if (slot.promoteHold >= PROMOTE_HOLD) {
-            const current = this.active();
-            if (current && current.phase !== 'leaving') this.demote(current, w, h);
-            this.promote(slot, w, h);
-          }
         }
       }
     }

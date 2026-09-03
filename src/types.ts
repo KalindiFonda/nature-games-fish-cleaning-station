@@ -19,7 +19,6 @@ export interface ClientFishInfo {
   elapsedSeconds: number;
   transitionCountdown: number;
   patienceFrac?: number; // 0..1 patience remaining for the patience bar
-  isVisitor?: boolean; // challenge mode: passing trade, double value
   isVisible: boolean;
 }
 
@@ -69,4 +68,5 @@ export interface Parasite {
   attachPart: 'upperTeeth' | 'lowerTeeth' | 'body' | 'belly' | 'operculum';
   hoverTimer: number; // accumulated seconds hovered by a fish's mouth
   removed: boolean;
+  fishIndex?: number; // for multi-fish species like french_grunt school
 }

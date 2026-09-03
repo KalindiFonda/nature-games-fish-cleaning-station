@@ -1,6 +1,6 @@
 import { Vector2D, Parasite } from '../types';
-import { lerp, clamp } from '../utils/math';
-import { parasiteUnit, drawParasite, drawEatRing, subsampleParasites } from './parasiteFx';
+import { lerp } from '../utils/math';
+import { parasiteUnit, drawParasite, drawEatRing } from './parasiteFx';
 
 export interface CleaningTargetSpot {
   id: string;
@@ -8,30 +8,42 @@ export interface CleaningTargetSpot {
   pos: Vector2D;
 }
 
+export interface GruntMember {
+  id: number;
+  offsetX: number; // in unscaled coordinates relative to school center
+  offsetY: number;
+  scaleMult: number; // relative size multiplier for perspective & distinction
+  depthOrder: number; // 1 = background, 2 = midground, 3 = foreground
+  breathPhaseOffset: number;
+  finPhaseOffset: number;
+  swayPhaseOffset: number;
+}
+
 /**
- * French Grunt (Haemulon flavolineatum)
+ * French Grunt School (Haemulon flavolineatum - Group of 3)
  *
- * Smooth Low-Poly & Anatomical Design:
- * - Size: ~20–30 cm (Scale ~4.5, appropriately smaller and deep-bodied)
- * - Deep-bodied, laterally compressed oval profile with soft convex dorsal arch
- * - Pearlescent silver/cream body base with bright metallic highlights
+ * Distinctly visible schooling trio:
+ * - Member 0 (Leader / Front-Center): At the head of the school formation
+ * - Member 1 (Upper-Trailing): Swimming above and behind, clearly visible in upper water
+ * - Member 2 (Lower-Trailing): Swimming below and behind, clearly visible in lower water
+ *
+ * Each fish features:
+ * - Pearlescent silver/cream body with high convex dorsal arch
  * - Vibrant golden-yellow head, snout, and forehead
- * - Several prominent, crisp golden-yellow horizontal and diagonal stripes traversing the flanks
- * - Radiant electric blue/slate-gray facial accent stripes and ocular lines
- * - Large, expressive dark-pupil eye with brilliant gold-yellow iris
- * - Relatively small, terminal mouth with soft pale lips, red interior lining, and tiny incisor teeth
- * - Soft-flowing spiny/soft continuous dorsal fin with yellow margins
- * - Translucent yellow pectoral, pelvic, anal, and forked caudal fins
- * - Procedural 3D perspective turn between Profile and Facing Player
- * - Parasite cleaning target network across mouth/lips, yellow head, blue facial stripes, and striped body flanks
+ * - Distinctive golden-yellow horizontal (lower) and diagonal (upper) stripes
+ * - Radiant electric blue facial accent stripes
+ * - Large expressive eye with golden iris & black pupil
+ * - Small terminal mouth with soft pale lips & scarlet red interior
+ * - Translucent yellow dorsal, anal, pelvic, and forked caudal fins
+ * - Dedicated parasites distributed across all 3 fish
+ * - Schooling arrival into queue together, activation together, cleaning together, and departure together
  */
 export class FrenchGrunt {
   public pos: Vector2D = { x: 0, y: 0 };
   public targetPos: Vector2D = { x: 0, y: 0 };
-  public heading: number = Math.PI; // Facing left toward cleaning station in profile
+  public heading: number = Math.PI;
 
-  // Scale 2.82 (0.6x relative to Queen Triggerfish baseline 4.7)
-  public scale: number = 1.7;
+  public scale: number = 2.04;
 
   public state: 'entering' | 'stationary' | 'exiting' | 'exited' = 'entering';
   public entrySpeed: number = 2.7;
@@ -40,25 +52,57 @@ export class FrenchGrunt {
   public animTime: number = 0;
   public breathPhase: number = 0;
   public finPhase: number = 0;
-  public mouthAperture: number = 0.8; // Small mouth rhythmic aperture
+  public mouthAperture: number = 0.8;
 
   public isVisible: boolean = true;
-
-  // Procedural Turn & Perspective Facing State
   public facingPlayer: boolean = false;
-  public turnProgress: number = 0; // 0.0 = Profile (side view), 1.0 = Facing Player
-  public turnSpeed: number = 0.0075;
+  public turnProgress: number = 0;
 
-  // Parasites on mouth, head, and striped body
+  // Parasites distributed across all 3 fish in the school
   public parasites: Parasite[] = [];
 
-  // Cavity gates driven by the ClientDirector (1 = open/eatable):
-  // gill parasites hide under the operculum flap, teeth behind the lips.
+  // Cavity gates driven by ClientDirector
   public gillOpen: number = 1;
   public mouthGate: number = 1;
 
+  // The 3 distinctly visible school members
+  public readonly members: GruntMember[] = [
+    // Member 0: Lead fish (out in front, center-low)
+    {
+      id: 0,
+      offsetX: -26,
+      offsetY: -3,
+      scaleMult: 1.0,
+      depthOrder: 3,
+      breathPhaseOffset: 0,
+      finPhaseOffset: 0,
+      swayPhaseOffset: 0,
+    },
+    // Member 1: Upper-trailing fish (visible above and behind leader)
+    {
+      id: 1,
+      offsetX: 28,
+      offsetY: -36,
+      scaleMult: 0.92,
+      depthOrder: 1,
+      breathPhaseOffset: 1.7,
+      finPhaseOffset: 1.4,
+      swayPhaseOffset: 2.1,
+    },
+    // Member 2: Lower-trailing fish (visible below and behind leader)
+    {
+      id: 2,
+      offsetX: 22,
+      offsetY: 34,
+      scaleMult: 0.95,
+      depthOrder: 2,
+      breathPhaseOffset: 3.5,
+      finPhaseOffset: 2.9,
+      swayPhaseOffset: 4.2,
+    },
+  ];
+
   constructor(canvasWidth: number, canvasHeight: number) {
-    // Start offscreen to the right
     this.pos = {
       x: canvasWidth + 400,
       y: canvasHeight * 0.47,
@@ -69,133 +113,141 @@ export class FrenchGrunt {
     };
 
     this.initParasites();
-    this.parasites = subsampleParasites(this.parasites, 8);
   }
 
   /**
-   * Initialize parasites over the small mouth, bright yellow head, and striped flanks
+   * Initializes parasites across all 3 fish members.
+   * Each fish receives between 10 and 12 parasites, for a total of between 30 and 36 across the school.
    */
   private initParasites() {
     this.parasites = [];
-    let id = 500;
+    let idCounter = 500;
 
-    // 1. Parasites on relatively small mouth and lips
-    const mouthCoords = [
-      { x: -34.0, y: 1.0, type: 'teeth' as const, part: 'upperTeeth' as const },
-      { x: -32.5, y: 0.0, type: 'teeth' as const, part: 'upperTeeth' as const },
-      { x: -35.2, y: 2.0, type: 'teeth' as const, part: 'upperTeeth' as const },
-      { x: -31.0, y: 0.5, type: 'teeth' as const, part: 'upperTeeth' as const },
-      { x: -33.5, y: 3.5, type: 'teeth' as const, part: 'lowerTeeth' as const },
-      { x: -35.0, y: 4.2, type: 'teeth' as const, part: 'lowerTeeth' as const },
-      { x: -32.0, y: 3.0, type: 'teeth' as const, part: 'lowerTeeth' as const },
+    // Anatomical site templates for a French Grunt
+    const teethSites: Array<{ type: 'teeth'; localX: number; localY: number; attachPart: 'upperTeeth' | 'lowerTeeth' }> = [
+      { type: 'teeth', localX: -33.5, localY: 1.2, attachPart: 'upperTeeth' },
+      { type: 'teeth', localX: -32.5, localY: 2.6, attachPart: 'lowerTeeth' },
+      { type: 'teeth', localX: -31.6, localY: 2.0, attachPart: 'lowerTeeth' },
     ];
 
-    for (const c of mouthCoords) {
-      this.parasites.push({
-        id: id++,
-        type: c.type,
-        localX: c.x,
-        localY: c.y,
-        attachPart: c.part,
-        hoverTimer: 0,
-        removed: false,
-      });
-    }
-
-    // 2. Parasites on bright yellow head, blue facial markings, and operculum
-    const headCoords = [
-      { x: -28.0, y: -4.0, part: 'body' as const },
-      { x: -25.0, y: -10.0, part: 'body' as const },
-      { x: -22.0, y: -15.0, part: 'body' as const },
-      { x: -16.0, y: -18.0, part: 'body' as const },
-      { x: -18.0, y: -7.0, part: 'operculum' as const },
-      { x: -14.0, y: 0.0, part: 'operculum' as const },
-      { x: -12.0, y: 5.0, part: 'operculum' as const },
-      { x: -20.0, y: 7.0, part: 'belly' as const },
-      { x: -26.0, y: 4.5, part: 'body' as const },
+    const operculumSites: Array<{ type: 'body'; localX: number; localY: number; attachPart: 'operculum' }> = [
+      { type: 'body', localX: -14.0, localY: -1.5, attachPart: 'operculum' },
+      { type: 'body', localX: -13.0, localY: 3.2, attachPart: 'operculum' },
+      { type: 'body', localX: -15.2, localY: 1.0, attachPart: 'operculum' },
     ];
 
-    for (const c of headCoords) {
-      this.parasites.push({
-        id: id++,
-        type: 'body',
-        localX: c.x,
-        localY: c.y,
-        attachPart: c.part,
-        hoverTimer: 0,
-        removed: false,
-      });
-    }
-
-    // 3. Parasites along the silver flanks and yellow horizontal stripes
-    const flankCoords = [
-      { x: -8.0, y: -14.0 },
-      { x: 0.0, y: -16.0 },
-      { x: 8.0, y: -15.0 },
-      { x: 16.0, y: -12.0 },
-      { x: -6.0, y: -6.0 },
-      { x: 2.0, y: -5.0 },
-      { x: 10.0, y: -4.0 },
-      { x: 18.0, y: -3.0 },
-      { x: -4.0, y: 2.0 },
-      { x: 4.0, y: 3.0 },
-      { x: 12.0, y: 4.0 },
-      { x: 20.0, y: 4.0 },
-      { x: -6.0, y: 10.0 },
-      { x: 2.0, y: 11.0 },
-      { x: 10.0, y: 10.0 },
+    const bellySites: Array<{ type: 'body'; localX: number; localY: number; attachPart: 'belly' }> = [
+      { type: 'body', localX: -5.5, localY: 8.5, attachPart: 'belly' },
+      { type: 'body', localX: 3.2, localY: 10.2, attachPart: 'belly' },
+      { type: 'body', localX: 11.5, localY: 7.2, attachPart: 'belly' },
     ];
 
-    for (const c of flankCoords) {
-      this.parasites.push({
-        id: id++,
-        type: 'body',
-        localX: c.x,
-        localY: c.y,
-        attachPart: 'body',
-        hoverTimer: 0,
-        removed: false,
-      });
-    }
-
-    // 4. Parasites on belly and caudal peduncle
-    const rearCoords = [
-      { x: 24.0, y: -6.0 },
-      { x: 30.0, y: -2.0 },
-      { x: 34.0, y: 1.0 },
-      { x: 28.0, y: 5.0 },
-      { x: 22.0, y: 7.0 },
+    const bodyFlankSites: Array<{ type: 'body'; localX: number; localY: number; attachPart: 'body' }> = [
+      { type: 'body', localX: -22.0, localY: -10.5, attachPart: 'body' }, // forehead
+      { type: 'body', localX: -17.0, localY: -13.0, attachPart: 'body' }, // crown
+      { type: 'body', localX: -9.0, localY: -14.5, attachPart: 'body' },  // upper anterior
+      { type: 'body', localX: 1.0, localY: -13.5, attachPart: 'body' },   // upper dorsal
+      { type: 'body', localX: 11.0, localY: -11.0, attachPart: 'body' },  // upper rear
+      { type: 'body', localX: -4.0, localY: -3.5, attachPart: 'body' },   // mid flank
+      { type: 'body', localX: 4.0, localY: -1.0, attachPart: 'body' },    // mid center
+      { type: 'body', localX: 13.0, localY: 0.5, attachPart: 'body' },    // mid posterior
+      { type: 'body', localX: 20.5, localY: -4.5, attachPart: 'body' },   // upper peduncle
+      { type: 'body', localX: 22.0, localY: 1.5, attachPart: 'body' },    // lower peduncle
     ];
 
-    for (const c of rearCoords) {
-      this.parasites.push({
-        id: id++,
-        type: 'body',
-        localX: c.x,
-        localY: c.y,
-        attachPart: 'body',
-        hoverTimer: 0,
-        removed: false,
-      });
+    for (let fishIdx = 0; fishIdx < 3; fishIdx++) {
+      // Each fish receives between 10 and 12 parasites
+      const targetCount = 10 + Math.floor(Math.random() * 3); // 10, 11, or 12
+
+      const teethPicks = [...teethSites].sort(() => Math.random() - 0.5).slice(0, 2);
+      const opercPicks = [...operculumSites].sort(() => Math.random() - 0.5).slice(0, 2);
+      const bellyPicks = [...bellySites].sort(() => Math.random() - 0.5).slice(0, 2);
+      const remainingNeeded = targetCount - (teethPicks.length + opercPicks.length + bellyPicks.length);
+      const flankPicks = [...bodyFlankSites].sort(() => Math.random() - 0.5).slice(0, remainingNeeded);
+
+      const combined = [...teethPicks, ...opercPicks, ...bellyPicks, ...flankPicks];
+
+      for (const site of combined) {
+        idCounter++;
+        const jitterX = (Math.random() - 0.5) * 0.8;
+        const jitterY = (Math.random() - 0.5) * 0.8;
+        this.parasites.push({
+          id: idCounter,
+          type: site.type,
+          localX: site.localX + jitterX,
+          localY: site.localY + jitterY,
+          attachPart: site.attachPart,
+          hoverTimer: 0,
+          removed: false,
+          fishIndex: fishIdx,
+        });
+      }
     }
   }
 
-  public getParasiteLocalPos(p: Parasite): Vector2D {
+  /**
+   * Returns member offset position relative to school center (this.pos)
+   */
+  public getMemberLocalPos(m: GruntMember): Vector2D {
     const s = this.scale;
-    let lx = p.localX * s;
-    let ly = p.localY * s;
+    const swayX = Math.sin(this.animTime * 1.8 + m.swayPhaseOffset) * 2.2 * s;
+    const swayY = Math.cos(this.animTime * 1.5 + m.swayPhaseOffset) * 1.8 * s;
+    return {
+      x: m.offsetX * s + swayX,
+      y: m.offsetY * s + swayY,
+    };
+  }
+
+  /**
+   * World positions for all 3 members (used for sparkles and target AI)
+   */
+  public getMembersWorldPositions(): Vector2D[] {
+    return this.members.map((m) => {
+      const local = this.getMemberLocalPos(m);
+      return {
+        x: this.pos.x + local.x,
+        y: this.pos.y + local.y,
+      };
+    });
+  }
+
+  /**
+   * Returns parasite local position relative to that specific member's center
+   */
+  public getParasiteMemberLocalPos(p: Parasite, memberScale: number, memberId: number): Vector2D {
+    const mem = this.members[memberId] || this.members[0];
+    let lx = p.localX * memberScale;
+    let ly = p.localY * memberScale;
+    const breath = this.breathPhase + mem.breathPhaseOffset;
 
     if (p.attachPart === 'lowerTeeth') {
-      ly = p.localY * this.mouthAperture * s;
+      ly = p.localY * this.mouthAperture * memberScale;
     } else if (p.attachPart === 'belly') {
-      ly = p.localY * s + Math.sin(this.breathPhase) * 1.4;
+      ly = p.localY * memberScale + Math.sin(breath) * 1.4;
     } else if (p.attachPart === 'operculum') {
-      lx = p.localX * s - Math.sin(this.breathPhase) * 1.5;
+      lx = p.localX * memberScale - Math.sin(breath) * 1.5;
     }
-
     return { x: lx, y: ly };
   }
 
+  /**
+   * Parasite position relative to the school center (this.pos)
+   */
+  public getParasiteLocalPos(p: Parasite): Vector2D {
+    const memberId = p.fishIndex ?? 0;
+    const mem = this.members[memberId] || this.members[0];
+    const memPos = this.getMemberLocalPos(mem);
+    const ms = this.scale * mem.scaleMult;
+    const pl = this.getParasiteMemberLocalPos(p, ms, memberId);
+    return {
+      x: memPos.x + pl.x,
+      y: memPos.y + pl.y,
+    };
+  }
+
+  /**
+   * Parasite world position on canvas
+   */
   public getParasiteWorldPos(p: Parasite): Vector2D {
     const local = this.getParasiteLocalPos(p);
     return {
@@ -204,6 +256,9 @@ export class FrenchGrunt {
     };
   }
 
+  /**
+   * Updates parasite eating detection across all 3 fish
+   */
   public updateParasites(
     wrasseMouth: Vector2D | null,
     gobiMouth: Vector2D | null,
@@ -211,8 +266,6 @@ export class FrenchGrunt {
     wrasseScale: number = 0.9,
     gobiScale: number = 0.65
   ) {
-    if (this.turnProgress > 0.4) return;
-
     const wrasseEatDist = 20 * wrasseScale;
     const gobiEatDist = 18 * gobiScale;
 
@@ -251,6 +304,10 @@ export class FrenchGrunt {
     return spots;
   }
 
+  /**
+   * Parasite statistics across ALL fish in the school.
+   * Fully cleaned is only achieved when remaining === 0 (all parasites from all 3 fish eaten).
+   */
   public getParasiteStats() {
     let teethTotal = 0;
     let teethRemoved = 0;
@@ -300,107 +357,71 @@ export class FrenchGrunt {
     return false;
   }
 
+  /**
+   * Hit test against ANY of the 3 fish in the school
+   */
   public hitTest(pos: Vector2D): boolean {
     if (this.state === 'exited' || !this.isVisible) return false;
-    const dx = pos.x - this.pos.x;
-    const dy = pos.y - this.pos.y;
-    const r = 95 * (this.scale / 4.5);
-    return dx * dx + dy * dy < r * r;
+    for (const m of this.members) {
+      const memPos = this.getMemberLocalPos(m);
+      const mx = this.pos.x + memPos.x;
+      const my = this.pos.y + memPos.y;
+      const dx = pos.x - mx;
+      const dy = pos.y - my;
+      const r = 85 * ((this.scale * m.scaleMult) / 4.5);
+      if (dx * dx + dy * dy < r * r) return true;
+    }
+    return false;
   }
 
+  /**
+   * Cleaning spots covering mouth, head, and flank across all 3 fish
+   */
   public getCleaningStationSpots(): CleaningTargetSpot[] {
-    const s = this.scale;
     const spots: CleaningTargetSpot[] = [];
+    const memberLabels = ['Lead Grunt', 'Upper Grunt', 'Lower Grunt'];
 
-    // Profile cleaning spots
-    spots.push(
-      {
-        id: 'grunt-mouth',
-        name: 'Small Grunt Mouth & Lips',
-        pos: { x: this.pos.x - 33 * s, y: this.pos.y + 2 * s },
-      },
-      {
-        id: 'grunt-head',
-        name: 'Yellow Head & Blue Face Markings',
-        pos: { x: this.pos.x - 22 * s, y: this.pos.y - 7 * s },
-      },
-      {
-        id: 'grunt-eye',
-        name: 'Expressive Eye Orbital',
-        pos: { x: this.pos.x - 20 * s, y: this.pos.y - 4 * s },
-      },
-      {
-        id: 'grunt-stripes',
-        name: 'Yellow Diagonal & Horizontal Stripes',
-        pos: { x: this.pos.x + 4 * s, y: this.pos.y - 2 * s },
-      },
-      {
-        id: 'grunt-dorsal',
-        name: 'Golden Spiny Dorsal Fin',
-        pos: { x: this.pos.x - 2 * s, y: this.pos.y - 24 * s },
-      },
-      {
-        id: 'grunt-tail',
-        name: 'Silver Peduncle & Tail',
-        pos: { x: this.pos.x + 30 * s, y: this.pos.y },
-      }
-    );
+    this.members.forEach((m, idx) => {
+      const memPos = this.getMemberLocalPos(m);
+      const ms = this.scale * m.scaleMult;
+      const label = memberLabels[idx];
+
+      spots.push(
+        {
+          id: `grunt-${idx}-mouth`,
+          name: `${label} Mouth & Lips`,
+          pos: { x: this.pos.x + memPos.x - 33 * ms, y: this.pos.y + memPos.y + 2 * ms },
+        },
+        {
+          id: `grunt-${idx}-head`,
+          name: `${label} Golden Head & Operculum`,
+          pos: { x: this.pos.x + memPos.x - 18 * ms, y: this.pos.y + memPos.y - 4 * ms },
+        },
+        {
+          id: `grunt-${idx}-stripes`,
+          name: `${label} Striped Flanks`,
+          pos: { x: this.pos.x + memPos.x + 6 * ms, y: this.pos.y + memPos.y - 1 * ms },
+        }
+      );
+    });
 
     return spots;
   }
 
-  public update(canvasWidth: number, canvasHeight: number, dt: number) {
+  public update(_canvasWidth: number, _canvasHeight: number, dt: number) {
     this.animTime += dt * 0.038;
     this.breathPhase += dt * 0.048;
     this.finPhase += dt * 0.12;
 
     // Small mouth rhythmic pulsing
     this.mouthAperture = 0.75 + Math.sin(this.breathPhase * 1.4) * 0.25;
-
     this.turnProgress = 0;
     this.facingPlayer = false;
-
-    const profileTargetX = this.getProfileTargetX(canvasWidth);
-    this.targetPos.x = profileTargetX;
-    this.targetPos.y = canvasHeight * 0.47;
-
-    // Floating subtle bobbing
-    const bob = Math.sin(this.animTime * 1.3) * (3.2 * (1 - this.turnProgress * 0.4));
-    const sway = Math.cos(this.animTime * 0.95) * 2.2;
-
-    // State Machine
-    if (this.state === 'entering') {
-      const dx = this.targetPos.x - this.pos.x;
-      const dy = this.targetPos.y - this.pos.y;
-      const dist = Math.hypot(dx, dy);
-
-      if (dist < 4.0) {
-        this.state = 'stationary';
-        this.pos.x = this.targetPos.x;
-        this.pos.y = this.targetPos.y;
-      } else {
-        this.pos.x += (dx / dist) * this.entrySpeed * dt;
-        this.pos.y += (dy / dist) * this.entrySpeed * dt;
-      }
-    } else if (this.state === 'stationary') {
-      const dx = this.targetPos.x - this.pos.x;
-      const dy = this.targetPos.y - this.pos.y;
-      this.pos.x += dx * 0.05 * dt;
-      this.pos.y += dy * 0.05 * dt;
-    } else if (this.state === 'exiting') {
-      this.pos.x += this.exitSpeed * dt;
-      if (this.pos.x > canvasWidth + 500) {
-        this.state = 'exited';
-        this.isVisible = false;
-      }
-    }
-
-    this.pos.y += bob * 0.04 * dt;
-    this.pos.x += sway * 0.02 * dt;
   }
 
   /**
-   * Main Render Dispatcher
+   * Main Render Dispatcher:
+   * Renders the 3 fish sorted by depthOrder (background to foreground)
    */
   public render(ctx: CanvasRenderingContext2D) {
     if (!this.isVisible || this.state === 'exited') return;
@@ -408,53 +429,62 @@ export class FrenchGrunt {
     ctx.save();
     ctx.translate(this.pos.x, this.pos.y);
 
-    this.renderProfile(ctx);
+    // Sort: Member 1 (Upper-trailing, background) -> Member 2 (Lower-trailing) -> Member 0 (Leader, foreground)
+    const sortedMembers = [...this.members].sort((a, b) => a.depthOrder - b.depthOrder);
+    for (const mem of sortedMembers) {
+      this.renderMemberFish(ctx, mem);
+    }
 
     ctx.restore();
   }
 
   /**
-   * Render Profile View:
-   * Smooth low-poly deep-bodied silver/cream body, yellow head, blue facial stripes,
-   * strong yellow horizontal/diagonal body stripes, large expressive eye, and yellow fins.
+   * Renders an individual French Grunt in the school formation
    */
-  private renderProfile(ctx: CanvasRenderingContext2D) {
-    const s = this.scale;
-    const breathOffset = Math.sin(this.breathPhase) * 1.6;
-    const finWave = Math.sin(this.finPhase);
+  private renderMemberFish(ctx: CanvasRenderingContext2D, mem: GruntMember) {
+    const memPos = this.getMemberLocalPos(mem);
+    const s = this.scale * mem.scaleMult;
+    const breath = this.breathPhase + mem.breathPhaseOffset;
+    const breathOffset = Math.sin(breath) * 1.6;
+    const finWave = Math.sin(this.finPhase + mem.finPhaseOffset);
 
-    // 1. Spiny & Soft Dorsal Fin (Yellow/amber continuous fin along upper back)
+    ctx.save();
+    ctx.translate(memPos.x, memPos.y);
+
+    // 1. Spiny & Soft Dorsal Fin
     this.renderDorsalFin(ctx, s, finWave);
 
-    // 2. Anal Fin (Golden yellow rear bottom fin)
+    // 2. Anal Fin
     this.renderAnalFin(ctx, s, finWave);
 
-    // 3. Caudal Tail (Forked translucent golden-yellow tail)
-    this.renderCaudalFin(ctx, s, finWave);
+    // 3. Caudal Tail
+    this.renderCaudalFin(ctx, s, finWave, mem.swayPhaseOffset);
 
-    // 4. Pelvic Fin (Translucent yellow ventral fin)
+    // 4. Pelvic Fin
     this.renderPelvicFin(ctx, s, finWave);
 
-    // 5. Main Deep Body Profile (Silver/cream base with yellow head zone)
+    // 5. Main Deep Body Profile with operculum and inner gill filament slit
     this.renderMainBody(ctx, s, breathOffset);
 
     // 6. Yellow Horizontal & Diagonal Stripes on Flanks
     this.renderYellowBodyStripes(ctx, s);
 
-    // 7. Electric Blue / Slate-Gray Facial Accent Markings & Head Details
+    // 7. Electric Blue / Slate-Gray Facial Accent Markings
     this.renderFacialMarkings(ctx, s);
 
     // 8. Large Expressive Eye
     this.renderLargeExpressiveEye(ctx, s);
 
-    // 9. Relatively Small Grunt Mouth & Soft Pale Lips
+    // 9. Small Grunt Mouth & Scarlet Red Gape
     this.renderSmallMouth(ctx, s);
 
     // 10. Translucent Yellow Pectoral Fin
     this.renderPectoralFin(ctx, s, finWave);
 
-    // 11. Parasites
-    this.renderParasites(ctx);
+    // 11. Parasites belonging to this specific member
+    this.renderMemberParasites(ctx, mem.id, s);
+
+    ctx.restore();
   }
 
   /**
@@ -472,8 +502,8 @@ export class FrenchGrunt {
     ctx.closePath();
 
     const dGrad = ctx.createLinearGradient(-10 * s, -28 * s, 34 * s, -8 * s);
-    dGrad.addColorStop(0, 'rgba(255, 215, 0, 0.9)'); // Bright gold
-    dGrad.addColorStop(0.5, 'rgba(240, 190, 40, 0.75)');
+    dGrad.addColorStop(0, 'rgba(255, 215, 0, 0.92)');
+    dGrad.addColorStop(0.5, 'rgba(240, 190, 40, 0.78)');
     dGrad.addColorStop(1, 'rgba(220, 160, 20, 0.55)');
     ctx.fillStyle = dGrad;
     ctx.fill();
@@ -510,7 +540,7 @@ export class FrenchGrunt {
     ctx.closePath();
 
     const aGrad = ctx.createLinearGradient(12 * s, 24 * s, 34 * s, 8 * s);
-    aGrad.addColorStop(0, 'rgba(255, 215, 0, 0.85)');
+    aGrad.addColorStop(0, 'rgba(255, 215, 0, 0.88)');
     aGrad.addColorStop(0.6, 'rgba(240, 180, 30, 0.7)');
     aGrad.addColorStop(1, 'rgba(220, 150, 10, 0.45)');
     ctx.fillStyle = aGrad;
@@ -539,19 +569,20 @@ export class FrenchGrunt {
   /**
    * Caudal Fin: Forked, energetic golden-yellow tail
    */
-  private renderCaudalFin(ctx: CanvasRenderingContext2D, s: number, finWave: number) {
+  private renderCaudalFin(
+    ctx: CanvasRenderingContext2D,
+    s: number,
+    _finWave: number,
+    phaseOffset: number
+  ) {
     ctx.save();
-    const sway = Math.sin(this.animTime * 1.6) * 3.5;
+    const sway = Math.sin(this.animTime * 1.6 + phaseOffset) * 3.5;
 
     ctx.beginPath();
     ctx.moveTo(34 * s, -8 * s);
-    // Upper lobe
     ctx.bezierCurveTo(46 * s, -18 * s + sway, 56 * s, -16 * s + sway, 58 * s, -12 * s + sway);
-    // Central fork notch
     ctx.bezierCurveTo(50 * s, -4 * s + sway, 46 * s, 0 + sway, 44 * s, 0 + sway);
-    // Lower fork notch
     ctx.bezierCurveTo(46 * s, 0 + sway, 50 * s, 4 * s + sway, 58 * s, 12 * s + sway);
-    // Lower lobe
     ctx.bezierCurveTo(56 * s, 16 * s + sway, 46 * s, 18 * s + sway, 34 * s, 8 * s);
     ctx.closePath();
 
@@ -596,7 +627,7 @@ export class FrenchGrunt {
     ctx.lineTo(9 * s, 6 * s);
     ctx.lineTo(3 * s, 0);
     ctx.closePath();
-    ctx.fillStyle = 'rgba(255, 215, 0, 0.75)';
+    ctx.fillStyle = 'rgba(255, 215, 0, 0.78)';
     ctx.fill();
     ctx.strokeStyle = 'rgba(255, 240, 120, 0.8)';
     ctx.lineWidth = 1.0;
@@ -606,42 +637,34 @@ export class FrenchGrunt {
 
   /**
    * Main Deep Body Profile:
-   * Anatomical deep-bodied oval shape, steep convex forehead, silver/cream ground with yellow head
+   * Anatomical deep-bodied oval shape, convex forehead, silver/cream ground with golden head
    */
   private renderMainBody(ctx: CanvasRenderingContext2D, s: number, breathOffset: number) {
     ctx.save();
 
     // Contour path of deep-bodied French Grunt
     ctx.beginPath();
-    // Snout / small mouth tip
     ctx.moveTo(-33 * s, 1.5 * s);
-    // Convex forehead slope up to dorsal origin
     ctx.bezierCurveTo(-28 * s, -8 * s, -22 * s, -16 * s, -16 * s, -19 * s);
-    // High dorsal arch
     ctx.bezierCurveTo(-4 * s, -23 * s, 12 * s, -21 * s, 22 * s, -15 * s);
-    // Caudal peduncle top
     ctx.bezierCurveTo(28 * s, -11 * s, 32 * s, -8 * s, 34 * s, -8 * s);
-    // Caudal peduncle rear edge
     ctx.lineTo(34 * s, 8 * s);
-    // Caudal peduncle bottom
     ctx.bezierCurveTo(32 * s, 8 * s, 28 * s, 11 * s, 20 * s, 14 * s);
-    // Deep belly curve & throat
     ctx.bezierCurveTo(8 * s, 19 * s + breathOffset, -10 * s, 18 * s + breathOffset, -22 * s, 11 * s);
-    // Chin to lower lip
     ctx.bezierCurveTo(-27 * s, 7 * s, -31 * s, 4 * s, -33 * s, 3.5 * s);
     ctx.closePath();
 
-    // Complex multi-stop linear gradient: Brilliant yellow head blending to shimmering silver/cream flanks
+    // Golden yellow head blending into shimmering silver/cream flanks
     const bodyGrad = ctx.createLinearGradient(-33 * s, -10 * s, 34 * s, 10 * s);
-    bodyGrad.addColorStop(0, '#ffd43b'); // Golden yellow snout & head
-    bodyGrad.addColorStop(0.24, '#f7c948'); // Warm golden anterior
-    bodyGrad.addColorStop(0.42, '#f1f5f9'); // Silver/white pearlescent transition
-    bodyGrad.addColorStop(0.7, '#e2e8f0'); // Muted metallic silver flanks
-    bodyGrad.addColorStop(1, '#cbd5e1'); // Pale silver-gray caudal peduncle
+    bodyGrad.addColorStop(0, '#ffd43b');
+    bodyGrad.addColorStop(0.24, '#f7c948');
+    bodyGrad.addColorStop(0.42, '#f1f5f9');
+    bodyGrad.addColorStop(0.7, '#e2e8f0');
+    bodyGrad.addColorStop(1, '#cbd5e1');
     ctx.fillStyle = bodyGrad;
     ctx.fill();
 
-    // Metallic pearlescent specular highlight along upper back
+    // Specular highlight along upper back
     const dorsalSheen = ctx.createLinearGradient(0, -22 * s, 0, 0);
     dorsalSheen.addColorStop(0, 'rgba(255, 255, 255, 0.45)');
     dorsalSheen.addColorStop(1, 'rgba(255, 255, 255, 0.0)');
@@ -649,14 +672,33 @@ export class FrenchGrunt {
     ctx.fill();
 
     // Anatomical edge stroke
-    ctx.strokeStyle = 'rgba(230, 200, 100, 0.6)';
+    ctx.strokeStyle = 'rgba(230, 200, 100, 0.65)';
     ctx.lineWidth = 1.4;
     ctx.stroke();
+
+    // Inner gill filament slit when operculum opens for cleaning
+    if (this.gillOpen > 0.05) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(-13 * s, 2 * s, 2.8 * s, 7.5 * s * Math.min(1, this.gillOpen), 0.15, 0, Math.PI * 2);
+      ctx.fillStyle = '#450a0a';
+      ctx.fill();
+      // Crimson filament combs
+      ctx.strokeStyle = '#dc2626';
+      ctx.lineWidth = 1.0;
+      for (let g = -3; g <= 3; g++) {
+        ctx.beginPath();
+        ctx.moveTo(-14 * s, (2 + g * 1.8) * s);
+        ctx.lineTo(-11 * s, (2.5 + g * 1.8) * s);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
 
     // Operculum (gill cover) smooth curve
     ctx.beginPath();
     ctx.arc(-13 * s, 2 * s, 9 * s, -1.2, 0.9);
-    ctx.strokeStyle = 'rgba(210, 170, 40, 0.65)';
+    ctx.strokeStyle = 'rgba(210, 170, 40, 0.75)';
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
@@ -665,14 +707,13 @@ export class FrenchGrunt {
 
   /**
    * Yellow Horizontal & Diagonal Stripes on Body:
-   * Diagnostic feature of Haemulon flavolineatum (horizontal stripes below lateral line,
-   * oblique diagonal stripes above lateral line)
+   * Diagnostic feature of Haemulon flavolineatum
    */
   private renderYellowBodyStripes(ctx: CanvasRenderingContext2D, s: number) {
     ctx.save();
 
-    // 1. Oblique diagonal stripes above lateral line (sloping upward and backward)
-    ctx.strokeStyle = '#f59e0b'; // Rich golden-amber yellow
+    // Oblique diagonal stripes above lateral line
+    ctx.strokeStyle = '#f59e0b';
     ctx.lineWidth = 2.2 * (s / 4.5);
     ctx.lineCap = 'round';
 
@@ -690,7 +731,7 @@ export class FrenchGrunt {
       ctx.stroke();
     }
 
-    // 2. Strong horizontal stripes below lateral line (parallel along flank and belly)
+    // Strong horizontal stripes below lateral line
     const horizontalStripes = [
       { y: -3 * s, xStart: -16 * s, xEnd: 32 * s },
       { y: 1.5 * s, xStart: -14 * s, xEnd: 32 * s },
@@ -702,7 +743,6 @@ export class FrenchGrunt {
     for (const h of horizontalStripes) {
       ctx.beginPath();
       ctx.moveTo(h.xStart, h.y);
-      // Soft gentle wave matching the contour
       ctx.bezierCurveTo(
         (h.xStart + h.xEnd) * 0.4,
         h.y + 0.5 * s,
@@ -728,14 +768,13 @@ export class FrenchGrunt {
   }
 
   /**
-   * Electric Blue / Slate-Gray Facial Markings & Head Details:
-   * Diagnostic neon blue/slate stripes wrapping around the snout, eye, and cheeks
+   * Electric Blue / Slate-Gray Facial Markings:
+   * Diagnostic electric blue stripes wrapping snout and eye
    */
   private renderFacialMarkings(ctx: CanvasRenderingContext2D, s: number) {
     ctx.save();
 
-    // Electric cyan/blue facial stripes
-    ctx.strokeStyle = '#38bdf8'; // Electric sky blue
+    ctx.strokeStyle = '#38bdf8';
     ctx.lineWidth = 1.5 * (s / 4.5);
     ctx.lineCap = 'round';
 
@@ -772,48 +811,47 @@ export class FrenchGrunt {
   }
 
   /**
-   * Large Expressive-Looking Eye:
-   * Prominent, large eye with golden-yellow iris, rich black pupil, and glowing white specular highlights
+   * Large Expressive-Looking Eye
    */
   private renderLargeExpressiveEye(ctx: CanvasRenderingContext2D, s: number) {
     ctx.save();
     const ex = -20 * s;
     const ey = -4 * s;
-    const er = 5.2 * s; // Large, prominent eye
+    const er = 5.2 * s;
 
-    // Orbital fleshy socket ring
+    // Orbital socket ring
     ctx.beginPath();
     ctx.arc(ex, ey, er + 1.6 * s, 0, Math.PI * 2);
-    ctx.fillStyle = '#ca8a04'; // Deep gold orbital ring
+    ctx.fillStyle = '#ca8a04';
     ctx.fill();
-    ctx.strokeStyle = '#38bdf8'; // Blue rim accent
+    ctx.strokeStyle = '#38bdf8';
     ctx.lineWidth = 1.1;
     ctx.stroke();
 
-    // Eyeball / Iris (Brilliant golden yellow)
+    // Eyeball / Iris
     ctx.beginPath();
     ctx.arc(ex, ey, er, 0, Math.PI * 2);
     const irisGrad = ctx.createRadialGradient(ex - 1 * s, ey - 1 * s, 0.6 * s, ex, ey, er);
-    irisGrad.addColorStop(0, '#fef08a'); // Pale luminous gold center
-    irisGrad.addColorStop(0.5, '#eab308'); // Bright yellow
-    irisGrad.addColorStop(0.85, '#ca8a04'); // Deep amber gold
-    irisGrad.addColorStop(1, '#713f12'); // Dark rim
+    irisGrad.addColorStop(0, '#fef08a');
+    irisGrad.addColorStop(0.5, '#eab308');
+    irisGrad.addColorStop(0.85, '#ca8a04');
+    irisGrad.addColorStop(1, '#713f12');
     ctx.fillStyle = irisGrad;
     ctx.fill();
 
-    // Large dark pupil (Expressive look)
+    // Pupil
     ctx.beginPath();
     ctx.arc(ex, ey, er * 0.58, 0, Math.PI * 2);
     ctx.fillStyle = '#09090b';
     ctx.fill();
 
-    // Primary specular corneal glint
+    // Specular corneal glint
     ctx.beginPath();
     ctx.arc(ex - 1.5 * s, ey - 1.5 * s, 1.5 * s, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
     ctx.fill();
 
-    // Secondary soft reflection
+    // Secondary reflection
     ctx.beginPath();
     ctx.arc(ex + 1.2 * s, ey + 1.2 * s, 0.8 * s, 0, Math.PI * 2);
     ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
@@ -823,9 +861,7 @@ export class FrenchGrunt {
   }
 
   /**
-   * Relatively Small Grunt Mouth:
-   * Small terminal mouth with pale lips, bright red interior mouth lining (characteristic of grunts),
-   * and tiny delicate teeth
+   * Relatively Small Grunt Mouth & Pale Lips with Scarlet Red Interior
    */
   private renderSmallMouth(ctx: CanvasRenderingContext2D, s: number) {
     ctx.save();
@@ -834,19 +870,19 @@ export class FrenchGrunt {
     // Fleshy pale lips
     ctx.beginPath();
     ctx.ellipse(-33 * s, 2.5 * s, 2.8 * s, 3.2 * s, 0.15, 0, Math.PI * 2);
-    ctx.fillStyle = '#fed7aa'; // Soft pale fleshy tone
+    ctx.fillStyle = '#fed7aa';
     ctx.fill();
     ctx.strokeStyle = '#ea580c';
     ctx.lineWidth = 1.0;
     ctx.stroke();
 
-    // Bright scarlet/red interior mouth gape (characteristic feature that gives Grunts their name)
+    // Scarlet interior mouth lining
     ctx.beginPath();
     ctx.ellipse(-33.5 * s, 2.5 * s, 1.4 * s, 2.2 * s * aperture, 0, 0, Math.PI * 2);
-    ctx.fillStyle = '#dc2626'; // Vibrant scarlet red mouth lining
+    ctx.fillStyle = '#dc2626';
     ctx.fill();
 
-    // Tiny white delicate incisor teeth
+    // Delicate incisor teeth
     ctx.fillStyle = '#ffffff';
     // Upper teeth
     ctx.beginPath();
@@ -866,8 +902,7 @@ export class FrenchGrunt {
   }
 
   /**
-   * Pectoral Fin:
-   * Translucent golden-yellow fan fin
+   * Pectoral Fin: Translucent golden-yellow fan fin
    */
   private renderPectoralFin(ctx: CanvasRenderingContext2D, s: number, finWave: number) {
     ctx.save();
@@ -884,7 +919,7 @@ export class FrenchGrunt {
     ctx.bezierCurveTo(11 * s, 8 * s, 4 * s, 6 * s, 0, 0);
     ctx.closePath();
 
-    ctx.fillStyle = 'rgba(255, 215, 0, 0.7)';
+    ctx.fillStyle = 'rgba(255, 215, 0, 0.72)';
     ctx.fill();
     ctx.strokeStyle = 'rgba(255, 240, 120, 0.85)';
     ctx.lineWidth = 1.0;
@@ -904,12 +939,13 @@ export class FrenchGrunt {
   }
 
   /**
-   * Parasite Rendering & Interactive Station Glows
+   * Parasite Rendering for a specific member fish
    */
-  private renderParasites(ctx: CanvasRenderingContext2D) {
-    const unit = parasiteUnit(this.scale);
+  private renderMemberParasites(ctx: CanvasRenderingContext2D, memberId: number, s: number) {
+    const unit = parasiteUnit(s);
     for (const p of this.parasites) {
-      const local = this.getParasiteLocalPos(p);
+      if ((p.fishIndex ?? 0) !== memberId) continue;
+      const local = this.getParasiteMemberLocalPos(p, s, memberId);
       if (p.removed) {
         if (p.hoverTimer > 0) {
           ctx.save();
@@ -925,136 +961,5 @@ export class FrenchGrunt {
       drawParasite(ctx, unit, this.animTime, p.id, p.type === 'teeth');
       ctx.restore();
     }
-  }
-
-  /**
-   * Facing-Player View:
-   * Frontal perspective of the deep-bodied French Grunt, showcasing the golden-yellow forehead,
-   * bilateral electric blue facial markings, large expressive lateral eyes, and bright red interior mouth gape.
-   */
-  private renderFacingPlayer(ctx: CanvasRenderingContext2D) {
-    const s = this.scale;
-    const breathOffset = Math.sin(this.breathPhase) * 2.0;
-
-    // 1. Spiny Dorsal Crest (Centered on top)
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(-2 * s, -22 * s);
-    ctx.lineTo(0, -32 * s);
-    ctx.lineTo(2 * s, -22 * s);
-    ctx.closePath();
-    ctx.fillStyle = '#ffd43b';
-    ctx.fill();
-    ctx.strokeStyle = '#ca8a04';
-    ctx.lineWidth = 1.2;
-    ctx.stroke();
-    ctx.restore();
-
-    // 2. Frontal Body Silhouette
-    ctx.save();
-    ctx.beginPath();
-    // Forehead crown
-    ctx.moveTo(0, -22 * s);
-    // Cheeks & operculum sides
-    ctx.bezierCurveTo(-15 * s, -14 * s, -19 * s, -4 * s, -17 * s, 6 * s);
-    // Lower jaw & belly
-    ctx.bezierCurveTo(-14 * s, 14 * s, -8 * s, 21 * s + breathOffset, 0, 24 * s + breathOffset);
-    // Right side
-    ctx.bezierCurveTo(8 * s, 21 * s + breathOffset, 14 * s, 14 * s, 17 * s, 6 * s);
-    ctx.bezierCurveTo(19 * s, -4 * s, 15 * s, -14 * s, 0, -22 * s);
-    ctx.closePath();
-
-    const frontGrad = ctx.createRadialGradient(0, -2 * s, 4 * s, 0, 0, 22 * s);
-    frontGrad.addColorStop(0, '#fef08a'); // Bright gold center
-    frontGrad.addColorStop(0.5, '#eab308');
-    frontGrad.addColorStop(0.85, '#e2e8f0'); // Silver flank edges
-    frontGrad.addColorStop(1, '#94a3b8');
-    ctx.fillStyle = frontGrad;
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(234, 179, 8, 0.7)';
-    ctx.lineWidth = 1.6;
-    ctx.stroke();
-
-    // Bilateral electric blue facial stripes on front face
-    ctx.strokeStyle = '#38bdf8';
-    ctx.lineWidth = 1.6 * (s / 4.5);
-    // Left cheek stripe
-    ctx.beginPath();
-    ctx.moveTo(-6 * s, -12 * s);
-    ctx.bezierCurveTo(-10 * s, -6 * s, -11 * s, 2 * s, -7 * s, 8 * s);
-    ctx.stroke();
-    // Right cheek stripe
-    ctx.beginPath();
-    ctx.moveTo(6 * s, -12 * s);
-    ctx.bezierCurveTo(10 * s, -6 * s, 11 * s, 2 * s, 7 * s, 8 * s);
-    ctx.stroke();
-
-    // 3. Bilateral Large Expressive Eyes
-    const renderFrontEye = (x: number, y: number) => {
-      ctx.beginPath();
-      ctx.ellipse(x, y, 4.0 * s, 4.8 * s, 0, 0, Math.PI * 2);
-      ctx.fillStyle = '#ca8a04';
-      ctx.fill();
-      ctx.strokeStyle = '#38bdf8';
-      ctx.lineWidth = 1.0;
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.arc(x, y, 3.5 * s, 0, Math.PI * 2);
-      ctx.fillStyle = '#facc15';
-      ctx.fill();
-
-      ctx.beginPath();
-      ctx.arc(x, y, 2.2 * s, 0, Math.PI * 2);
-      ctx.fillStyle = '#09090b';
-      ctx.fill();
-
-      ctx.beginPath();
-      ctx.arc(x - 0.9 * s, y - 0.9 * s, 1.0 * s, 0, Math.PI * 2);
-      ctx.fillStyle = '#ffffff';
-      ctx.fill();
-    };
-
-    renderFrontEye(-14 * s, -4 * s);
-    renderFrontEye(14 * s, -4 * s);
-
-    // 4. Frontal Small Mouth & Scarlet Red Gape
-    ctx.beginPath();
-    ctx.ellipse(0, 8 * s, 3.4 * s, 2.5 * s * this.mouthAperture, 0, 0, Math.PI * 2);
-    ctx.fillStyle = '#dc2626'; // Vibrant red mouth interior
-    ctx.fill();
-    ctx.strokeStyle = '#ea580c';
-    ctx.lineWidth = 1.2;
-    ctx.stroke();
-
-    // Pale lips
-    ctx.beginPath();
-    ctx.ellipse(0, 8 * s, 4.2 * s, 3.2 * s * this.mouthAperture, 0, 0, Math.PI * 2);
-    ctx.strokeStyle = '#fed7aa';
-    ctx.lineWidth = 1.0;
-    ctx.stroke();
-
-    // 5. Bilateral Translucent Pectoral Fins (Fluttering outward)
-    const finFlutter = Math.sin(this.finPhase) * 0.35;
-
-    ctx.save();
-    ctx.translate(-17 * s, 6 * s);
-    ctx.rotate(-0.4 + finFlutter);
-    ctx.beginPath();
-    ctx.ellipse(0, 0, 8 * s, 3.5 * s, 0, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255, 215, 0, 0.7)';
-    ctx.fill();
-    ctx.restore();
-
-    ctx.save();
-    ctx.translate(17 * s, 6 * s);
-    ctx.rotate(0.4 - finFlutter);
-    ctx.beginPath();
-    ctx.ellipse(0, 0, 8 * s, 3.5 * s, 0, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255, 215, 0, 0.7)';
-    ctx.fill();
-    ctx.restore();
-
-    ctx.restore();
   }
 }

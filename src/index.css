@@ -6,3 +6,41 @@
     background-size: 36px 36px;
   }
 }
+
+/* Custom subtle cyan scrollbar for cards and modals */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(34, 211, 238, 0.4) rgba(0, 0, 0, 0.25);
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 9999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(34, 211, 238, 0.4);
+  border-radius: 9999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(34, 211, 238, 0.7);
+}
+
+@keyframes cursorSoothingPulse {
+
+  0%, 100% {
+    transform: translate(-50%, -50%) scale(0.92);
+    box-shadow: 0 0 4px rgba(56, 189, 248, 0.18), inset 0 0 2px rgba(56, 189, 248, 0.08);
+    border-color: rgba(125, 211, 252, 0.38);
+  }
+  50% {
+    transform: translate(-50%, -50%) scale(1.1);
+    box-shadow: 0 0 8px rgba(56, 189, 248, 0.3), inset 0 0 4px rgba(56, 189, 248, 0.15);
+    border-color: rgba(56, 189, 248, 0.48);
+  }
+}

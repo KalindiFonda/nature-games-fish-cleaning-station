@@ -25,8 +25,8 @@ export class YellowtailGoatfish {
   public targetPos: Vector2D = { x: 0, y: 0 };
   public heading: number = Math.PI; // Facing left toward the cleaning station in profile
 
-  // Scale 3.29 (0.7x relative to Queen Triggerfish baseline 4.7)
-  public scale: number = 2.0;
+  // Scaled up by 20% (from 2.0 to 2.4)
+  public scale: number = 2.4;
 
   public state: 'entering' | 'stationary' | 'exiting' | 'exited' = 'entering';
   public entrySpeed: number = 2.8;
@@ -65,7 +65,7 @@ export class YellowtailGoatfish {
     };
 
     this.initParasites();
-    this.parasites = subsampleParasites(this.parasites, 10);
+    this.parasites = subsampleParasites(this.parasites, 15);
   }
 
   /**
@@ -138,9 +138,12 @@ export class YellowtailGoatfish {
       { x: -14.0, y: -16.0, part: 'body' as const },
       { x: -6.0, y: -18.0, part: 'body' as const },
       // Opercular area
+      { x: -18.0, y: 1.0, part: 'operculum' as const },
       { x: -16.0, y: 4.0, part: 'operculum' as const },
+      { x: -13.0, y: -1.0, part: 'operculum' as const },
       { x: -10.0, y: 6.0, part: 'operculum' as const },
       { x: -6.0, y: 2.0, part: 'operculum' as const },
+      { x: -8.0, y: 4.0, part: 'operculum' as const },
       // Dorsal ridge
       { x: 2.0, y: -17.5, part: 'body' as const },
       { x: 12.0, y: -16.0, part: 'body' as const },

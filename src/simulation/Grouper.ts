@@ -13,8 +13,8 @@ export class Grouper {
   public targetPos: Vector2D = { x: 0, y: 0 };
   public heading: number = Math.PI; // Facing left toward the cleaner wrasse in profile
   
-  // Scale 7.52 (1.6x relative to Queen Triggerfish baseline 4.7)
-  public scale: number = 4.5;
+  // Scaled up by 20% (from 4.5 to 5.4)
+  public scale: number = 5.4;
   
   public state: 'entering' | 'stationary' | 'exiting' | 'exited' = 'entering';
   public entrySpeed: number = 2.4;
@@ -54,7 +54,7 @@ export class Grouper {
     };
 
     this.initParasites();
-    this.parasites = subsampleParasites(this.parasites, 16);
+    this.parasites = subsampleParasites(this.parasites, 24);
   }
 
   /**

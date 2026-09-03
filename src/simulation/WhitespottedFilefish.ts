@@ -29,8 +29,8 @@ export class WhitespottedFilefish {
   public targetPos: Vector2D = { x: 0, y: 0 };
   public heading: number = Math.PI; // Facing left toward cleaning station in profile
 
-  // Scale 3.29 (0.7x relative to Queen Triggerfish baseline 4.7)
-  public scale: number = 2.0;
+  // Scaled up by 20% (from 2.0 to 2.4)
+  public scale: number = 2.4;
 
   public state: 'entering' | 'stationary' | 'exiting' | 'exited' = 'entering';
   public entrySpeed: number = 2.5;
@@ -73,7 +73,7 @@ export class WhitespottedFilefish {
 
     this.initWhiteSpots();
     this.initParasites();
-    this.parasites = subsampleParasites(this.parasites, 10);
+    this.parasites = subsampleParasites(this.parasites, 15);
   }
 
   /**
@@ -130,9 +130,13 @@ export class WhitespottedFilefish {
       { x: -36.0, y: 1.5, type: 'teeth' as const, part: 'upperTeeth' as const },
       { x: -34.5, y: 0.5, type: 'teeth' as const, part: 'upperTeeth' as const },
       { x: -37.2, y: 2.5, type: 'teeth' as const, part: 'upperTeeth' as const },
+      { x: -35.5, y: -0.5, type: 'teeth' as const, part: 'upperTeeth' as const },
+      { x: -33.5, y: 1.0, type: 'teeth' as const, part: 'upperTeeth' as const },
       { x: -35.2, y: 3.8, type: 'teeth' as const, part: 'lowerTeeth' as const },
       { x: -36.8, y: 4.5, type: 'teeth' as const, part: 'lowerTeeth' as const },
       { x: -33.8, y: 3.2, type: 'teeth' as const, part: 'lowerTeeth' as const },
+      { x: -34.8, y: 5.2, type: 'teeth' as const, part: 'lowerTeeth' as const },
+      { x: -32.5, y: 4.0, type: 'teeth' as const, part: 'lowerTeeth' as const },
     ];
 
     for (const c of mouthCoords) {
@@ -173,9 +177,12 @@ export class WhitespottedFilefish {
       { x: -30.0, y: -5.0, part: 'body' as const },
       { x: -26.0, y: -12.0, part: 'body' as const },
       { x: -23.0, y: -18.0, part: 'body' as const },
+      { x: -18.0, y: -2.0, part: 'operculum' as const },
       { x: -15.0, y: -4.0, part: 'operculum' as const },
       { x: -12.0, y: 2.0, part: 'operculum' as const },
+      { x: -14.0, y: 4.5, part: 'operculum' as const },
       { x: -18.0, y: 6.0, part: 'operculum' as const },
+      { x: -10.0, y: 0.5, part: 'operculum' as const },
     ];
 
     for (const c of headCoords) {

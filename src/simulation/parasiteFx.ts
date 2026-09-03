@@ -72,9 +72,9 @@ export function drawEatRing(ctx: CanvasRenderingContext2D, unit: number, t: numb
 }
 
 /**
- * Thin a dense parasite layout down to roughly `target` marks while keeping
- * the mix of attach parts (teeth vs gills vs flank), picking evenly spaced
- * survivors from each group so coverage stays anatomical.
+ * Thin a dense parasite layout down to roughly `target` marks while concentrating
+ * heavily on the teeth and gill flaps (operculum) where cleaning activity is highest,
+ * and distributing remaining marks naturally across the body.
  */
 export function subsampleParasites(list: Parasite[], target: number): Parasite[] {
   if (list.length <= target) return list;
@@ -84,18 +84,61 @@ export function subsampleParasites(list: Parasite[], target: number): Parasite[]
     arr.push(p);
     groups.set(p.attachPart, arr);
   }
-  // The delicate zones (gill flap, teeth) carry the interesting gameplay,
-  // so they keep more of their parasites than plain proportion would give.
-  const MIN_KEEP: Record<string, number> = { operculum: 3, upperTeeth: 2, lowerTeeth: 2 };
+
+  // Heavy concentration on teeth and gill flaps as requested
+  const WEIGHTS: Record<string, number> = {
+    operculum: 2.6,
+    upperTeeth: 2.4,
+    lowerTeeth: 2.4,
+  };
+  const MIN_KEEP: Record<string, number> = {
+    operculum: 4,
+    upperTeeth: 3,
+    lowerTeeth: 3,
+  };
+
+  let totalWeight = 0;
+  for (const [part, arr] of groups.entries()) {
+    const w = (WEIGHTS[part] ?? 1.0) * arr.length;
+    totalWeight += w;
+  }
+
+  const quotas = new Map<string, number>();
+  let allocated = 0;
+
+  for (const [part, arr] of groups.entries()) {
+    const w = (WEIGHTS[part] ?? 1.0) * arr.length;
+    const rawQuota = Math.round((w / totalWeight) * target);
+    const minK = Math.min(arr.length, MIN_KEEP[part] ?? 1);
+    const quota = Math.min(arr.length, Math.max(minK, rawQuota));
+    quotas.set(part, quota);
+    allocated += quota;
+  }
+
+  // Balance any slight discrepancy with target
+  if (allocated < target) {
+    // Fill remaining budget into teeth/gills first, then body
+    const priorityParts = ['operculum', 'upperTeeth', 'lowerTeeth', 'body', 'belly'];
+    for (const part of priorityParts) {
+      const arr = groups.get(part);
+      if (!arr) continue;
+      let q = quotas.get(part) ?? 0;
+      while (q < arr.length && allocated < target) {
+        q++;
+        allocated++;
+      }
+      quotas.set(part, q);
+      if (allocated >= target) break;
+    }
+  }
+
   const out: Parasite[] = [];
   for (const [part, arr] of groups.entries()) {
-    const quota = Math.min(
-      arr.length,
-      Math.max(MIN_KEEP[part] ?? 1, Math.round((arr.length / list.length) * target))
-    );
+    const quota = quotas.get(part) ?? 0;
     for (let i = 0; i < quota; i++) {
       out.push(arr[Math.floor(((i + 0.5) * arr.length) / quota)]);
     }
   }
+
   return out;
 }

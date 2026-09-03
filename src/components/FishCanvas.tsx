@@ -2,9 +2,10 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { CleanerWrasse } from '../simulation/CleanerWrasse';
 import { SharknoseGoby } from '../simulation/SharknoseGoby';
 import { Reef } from '../simulation/Reef';
-import { ClientDirector, ClientFish, ChallengeInfo } from '../simulation/ClientDirector';
+import { ClientDirector, ClientFish, ClientSlot } from '../simulation/ClientDirector';
 import { AmbientSchool } from '../simulation/AmbientSchool';
 import { ControlledFish, ClientFishInfo, ClientFishSpecies } from '../types';
+import { playNibbleSound, initAudioOnInteraction } from '../utils/audio';
 
 export type ActiveClientFish = ClientFish;
 
@@ -18,6 +19,7 @@ interface FishCanvasProps {
   gobiScale: number;
   gobiSpeed: number;
   skipTrigger?: number;
+  pausePatience?: boolean;
   onParasiteStatsUpdate?: (stats: {
     total: number;
     remaining: number;
@@ -27,9 +29,6 @@ interface FishCanvasProps {
   }) => void;
   onClientFishUpdate?: (info: ClientFishInfo) => void;
   onClientCleaned?: () => void;
-  mode?: 'reef' | 'challenge';
-  challengeRestartTrigger?: number;
-  onChallengeUpdate?: (info: ChallengeInfo) => void;
 }
 
 interface WaterRipple {
@@ -84,8 +83,8 @@ export function getClientSpeciesMetadata(species: ClientFishSpecies) {
   switch (species) {
     case 'grouper':
       return {
-        name: 'Coral Grouper',
-        scientificName: 'Epinephelus lanceolatus',
+        name: 'Nassau Grouper',
+        scientificName: 'Epinephelus striatus',
         size: '~60–120 cm',
         keyFeatures: [
           'Heavy predatory cranium',
@@ -191,13 +190,12 @@ export function getClientSpeciesMetadata(species: ClientFishSpecies) {
         scientificName: 'Haemulon flavolineatum',
         size: '~20–30 cm',
         keyFeatures: [
-          'Smaller, deep-bodied reef fish',
-          'Silver/cream body',
-          'Several strong yellow horizontal stripes',
-          'Yellow head',
-          'Blue/gray facial markings',
-          'Large expressive-looking eye',
-          'Relatively small mouth',
+          'Schooling reef fish',
+          'Arrive, wait, and clean together',
+          'Silver/cream body & golden head',
+          'Yellow horizontal & diagonal stripes',
+          'Electric blue facial markings',
+          'Large expressive eye & small mouth',
         ],
       };
   }
@@ -212,19 +210,17 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
   gobiScale,
   gobiSpeed,
   skipTrigger,
+  pausePatience = false,
   onParasiteStatsUpdate,
   onClientFishUpdate,
   onClientCleaned,
-  mode = 'reef',
-  challengeRestartTrigger,
-  onChallengeUpdate,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const fishRef = useRef<CleanerWrasse | null>(null);
   const gobiRef = useRef<SharknoseGoby | null>(null);
 
-  // Reef-mode traffic controller: one active client + waiting clients
+  // Traffic controller: one active client + waiting clients
   const directorRef = useRef<ClientDirector | null>(null);
   const schoolsRef = useRef<AmbientSchool[]>([]);
 
@@ -238,54 +234,21 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
   const animFrameIdRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(performance.now());
   const selectedFishRef = useRef<ControlledFish>(selectedFish);
-  const isPointerDownRef = useRef<boolean>(false);
   const lastStatsSyncRef = useRef<number>(0);
   const lastSkipTriggerRef = useRef<number | undefined>(skipTrigger);
   const lastPointerTsRef = useRef<number>(performance.now());
-  const massageHeldRef = useRef<boolean>(false);
-  const biteHeldRef = useRef<boolean>(false);
-  const lastRestartRef = useRef<number | undefined>(challengeRestartTrigger);
 
-  // Mode switch drives the director
-  useEffect(() => {
-    const d = directorRef.current;
-    if (!d) return;
-    if (mode === 'challenge' && d.mode !== 'challenge') d.startChallenge();
-    if (mode === 'reef' && d.mode !== 'reef') d.stopChallenge();
-  }, [mode]);
-
-  // Restart button re-arms the timer
-  useEffect(() => {
-    if (
-      challengeRestartTrigger !== undefined &&
-      challengeRestartTrigger !== lastRestartRef.current
-    ) {
-      lastRestartRef.current = challengeRestartTrigger;
-      if (mode === 'challenge') directorRef.current?.startChallenge();
-    }
-  }, [challengeRestartTrigger, mode]);
-
-  // Challenge controls: hold SPACE to bite mucus, hold M to massage
-  useEffect(() => {
-    const down = (e: KeyboardEvent) => {
-      if (e.code === 'Space') {
-        biteHeldRef.current = true;
-        e.preventDefault();
-      }
-      if (e.code === 'KeyM') massageHeldRef.current = true;
-    };
-    const up = (e: KeyboardEvent) => {
-      if (e.code === 'Space') biteHeldRef.current = false;
-      if (e.code === 'KeyM') massageHeldRef.current = false;
-    };
-    window.addEventListener('keydown', down);
-    window.addEventListener('keyup', up);
-    return () => {
-      window.removeEventListener('keydown', down);
-      window.removeEventListener('keyup', up);
-    };
-  }, []);
   const onClientCleanedRef = useRef<typeof onClientCleaned>(onClientCleaned);
+  const pendingActivationRef = useRef<{
+    slot: ClientSlot;
+    remainingSec: number;
+  } | null>(null);
+
+  const [cursor, setCursor] = useState<{ x: number; y: number; visible: boolean }>({
+    x: 0,
+    y: 0,
+    visible: false,
+  });
 
   useEffect(() => {
     onClientCleanedRef.current = onClientCleaned;
@@ -297,6 +260,12 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
   useEffect(() => {
     selectedFishRef.current = selectedFish;
   }, [selectedFish]);
+
+  useEffect(() => {
+    if (directorRef.current) {
+      directorRef.current.patiencePaused = pausePatience;
+    }
+  }, [pausePatience]);
 
   const [dimensions, setDimensions] = useState<{ width: number; height: number }>({
     width: 800,
@@ -342,20 +311,16 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
     }
   }, [isRunning, wrasseScale, wrasseSpeed, gobiScale, gobiSpeed]);
 
-  // Handle global pointerup
+  // Reset pointer on window blur
   useEffect(() => {
-    const handleGlobalPointerUp = () => {
-      isPointerDownRef.current = false;
+    const handleBlur = () => {
       fishRef.current?.setPointer(null, false);
       gobiRef.current?.setPointer(null, false);
     };
 
-    window.addEventListener('pointerup', handleGlobalPointerUp);
-    window.addEventListener('pointercancel', handleGlobalPointerUp);
-
+    window.addEventListener('blur', handleBlur);
     return () => {
-      window.removeEventListener('pointerup', handleGlobalPointerUp);
-      window.removeEventListener('pointercancel', handleGlobalPointerUp);
+      window.removeEventListener('blur', handleBlur);
     };
   }, []);
 
@@ -415,25 +380,29 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    isPointerDownRef.current = true;
+    initAudioOnInteraction();
     lastPointerTsRef.current = performance.now();
 
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
+    setCursor({ x, y, visible: true });
 
     // Check hit tests to see if user clicked the Goby or the Wrasse to select them
     const hitGobi = gobiRef.current?.hitTest({ x, y });
     const hitWrasse = fishRef.current?.hitTest({ x, y });
 
     let active = selectedFishRef.current;
+    let switchedCleaner = false;
 
-    if (hitGobi && !hitWrasse) {
+    if (hitGobi && !hitWrasse && active !== 'gobi') {
       active = 'gobi';
       onSelectFish('gobi');
-    } else if (hitWrasse && !hitGobi) {
+      switchedCleaner = true;
+    } else if (hitWrasse && !hitGobi && active !== 'wrasse') {
       active = 'wrasse';
       onSelectFish('wrasse');
+      switchedCleaner = true;
     } else if (hitGobi && hitWrasse) {
       const distGobi = Math.hypot(
         x - (gobiRef.current?.headPos.x || 0),
@@ -443,8 +412,12 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
         x - (fishRef.current?.headPos.x || 0),
         y - (fishRef.current?.headPos.y || 0)
       );
-      active = distGobi < distWrasse ? 'gobi' : 'wrasse';
-      onSelectFish(active);
+      const chosen = distGobi < distWrasse ? 'gobi' : 'wrasse';
+      if (chosen !== active) {
+        active = chosen;
+        onSelectFish(active);
+        switchedCleaner = true;
+      }
     }
 
     if (active === 'gobi' && gobiRef.current) {
@@ -453,6 +426,39 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
     } else if (active === 'wrasse' && fishRef.current) {
       fishRef.current.setPointer({ x, y }, true);
       gobiRef.current?.setPointer(null, false);
+    }
+
+    // Manual client invitation from queue: hover cleaner over queue fish + click
+    const director = directorRef.current;
+    if (!switchedCleaner && director) {
+      const currentCleaner = active === 'wrasse' ? fishRef.current : gobiRef.current;
+      const cleanerHead = currentCleaner ? currentCleaner.headPos : { x, y };
+      const targetSlot =
+        director.findWaitingClientNear(cleanerHead) || director.findWaitingClientNear({ x, y });
+
+      if (targetSlot && targetSlot.role === 'waiting' && targetSlot.phase !== 'leaving') {
+        // Requirement: 2 second promotion dance
+        currentCleaner?.triggerInviteDance(2.0);
+
+        // Current station fish swims away (does NOT go to queue)
+        director.dismissActive('skipped');
+
+        pendingActivationRef.current = {
+          slot: targetSlot,
+          remainingSec: 2.0,
+        };
+
+        for (let i = 0; i < 9; i++) {
+          burstsRef.current.push({
+            x: cleanerHead.x + (Math.random() - 0.5) * 35,
+            y: cleanerHead.y + (Math.random() - 0.5) * 35,
+            age: 0,
+            golden: true,
+            mini: true,
+          });
+        }
+        playNibbleSound();
+      }
     }
 
     // Spawn water ripple
@@ -467,20 +473,14 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     lastPointerTsRef.current = performance.now();
-    if (!isPointerDownRef.current || e.buttons === 0) {
-      if (isPointerDownRef.current) {
-        isPointerDownRef.current = false;
-        fishRef.current?.setPointer(null, false);
-        gobiRef.current?.setPointer(null, false);
-      }
-      return;
-    }
+    initAudioOnInteraction();
 
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
+    setCursor({ x, y, visible: true });
 
     const active = selectedFishRef.current;
     if (active === 'gobi' && gobiRef.current) {
@@ -492,10 +492,10 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
     }
   };
 
-  const handlePointerUp = () => {
-    isPointerDownRef.current = false;
+  const handlePointerLeave = () => {
     fishRef.current?.setPointer(null, false);
     gobiRef.current?.setPointer(null, false);
+    setCursor((prev) => ({ ...prev, visible: false }));
   };
 
   // Main Render & Animation Loop
@@ -599,11 +599,23 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
           wrasseScale,
           gobiScale,
           selMouth,
-          biteHeldRef.current,
-          massageHeldRef.current,
+          false,
+          false,
           offDutyMouth,
           wrasseSelected ? gobiScale : wrasseScale
         );
+      }
+
+      // Update pending queue client manual invitation countdown
+      if (pendingActivationRef.current) {
+        const pending = pendingActivationRef.current;
+        pending.remainingSec -= dt / 60;
+        if (pending.remainingSec <= 0) {
+          if (director && pending.slot.phase !== 'leaving') {
+            director.promote(pending.slot, width, height);
+          }
+          pendingActivationRef.current = null;
+        }
       }
 
       const lists = director
@@ -638,55 +650,19 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
           ctx.scale(-1, 1);
           ctx.translate(-fx, -fy);
         }
-        // Wavey body while traveling: a speed-scaled flex (slight rotation +
-        // shear oscillating at tail-beat rate) so a moving fish visibly
-        // works its body instead of gliding like a cutout.
-        const flex = Math.min(0.09, slot.lastSpeed * 0.012);
-        if (flex > 0.004) {
-          const beat = slot.bobPhase * 5;
+        // Subtle body pitch while traveling without distorting shear
+        const isLeaving = slot.phase === 'leaving';
+        const flex = isLeaving
+          ? Math.min(0.006, slot.lastSpeed * 0.001)
+          : Math.min(0.018, slot.lastSpeed * 0.0025);
+        if (flex > 0.002) {
+          const beat = slot.bobPhase * 3.5;
           ctx.translate(fx, fy);
-          ctx.rotate(Math.sin(beat) * flex * 0.6);
-          ctx.transform(1, 0, Math.sin(beat + 1.2) * flex, 1, 0, 0);
+          ctx.rotate(Math.sin(beat) * flex);
           ctx.translate(-fx, -fy);
         }
         slot.fish.render(ctx);
         ctx.restore();
-      }
-
-      // Visitors carry a little suitcase (challenge mode)
-      if (mode === 'challenge') {
-        for (const slot of lists.openWater) {
-          if (!slot.visitor || slot.phase === 'leaving') continue;
-          const s = slot.fish.scale;
-          const sw = Math.min(30, (9 + 4.5 * s) * 1.2);
-          const sx = slot.pos.x - sw / 2;
-          const sy = slot.pos.y + 20 * s + Math.sin(slot.bobPhase * 1.1) * 2.5;
-          ctx.save();
-          ctx.globalAlpha *= slot.alpha;
-          // handle
-          ctx.beginPath();
-          ctx.arc(sx + sw / 2, sy, sw * 0.18, Math.PI, 0);
-          ctx.strokeStyle = '#5c3d1e';
-          ctx.lineWidth = 2;
-          ctx.stroke();
-          // case
-          const sh = sw * 0.66;
-          ctx.beginPath();
-          ctx.roundRect(sx, sy, sw, sh, 3);
-          ctx.fillStyle = '#a06b35';
-          ctx.fill();
-          ctx.strokeStyle = '#5c3d1e';
-          ctx.lineWidth = 1.4;
-          ctx.stroke();
-          // clasp band
-          ctx.beginPath();
-          ctx.moveTo(sx, sy + sh * 0.45);
-          ctx.lineTo(sx + sw, sy + sh * 0.45);
-          ctx.strokeStyle = 'rgba(92, 61, 30, 0.8)';
-          ctx.lineWidth = 1.2;
-          ctx.stroke();
-          ctx.restore();
-        }
       }
 
       // Full-body sparkles over a fully-cleaned client during its happy pause
@@ -694,35 +670,61 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
         if (!(slot.phase === 'leaving' && slot.leaveReason === 'cleaned' && slot.shimmyT > 0)) continue;
         const s = slot.fish.scale;
         ctx.save();
-        for (let i = 0; i < 11; i++) {
-          const tw = (Math.sin(slot.bobPhase * 8 + i * 2.1) + 1) / 2;
-          if (tw < 0.3) continue;
-          const px = slot.pos.x + Math.sin(i * 3.7 + 1.3) * 48 * (0.4 + s * 0.14);
-          const py = slot.pos.y + Math.cos(i * 2.9 + 0.7) * 20 * (0.4 + s * 0.14);
-          const r = 2 + tw * 3;
-          ctx.strokeStyle = `rgba(253, 230, 138, ${0.35 + tw * 0.6})`;
-          ctx.lineWidth = 1.4;
-          ctx.beginPath();
-          ctx.moveTo(px - r, py);
-          ctx.lineTo(px + r, py);
-          ctx.moveTo(px, py - r);
-          ctx.lineTo(px, py + r);
-          ctx.stroke();
-          ctx.beginPath();
-          ctx.arc(px, py, 1.1, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(255, 251, 235, ${0.5 + tw * 0.5})`;
-          ctx.fill();
+        if (slot.species === 'french_grunt' && 'getMembersWorldPositions' in slot.fish) {
+          const mPositions = (slot.fish as any).getMembersWorldPositions() as { x: number; y: number }[];
+          for (const mPos of mPositions) {
+            for (let i = 0; i < 7; i++) {
+              const tw = (Math.sin(slot.bobPhase * 8 + i * 2.1) + 1) / 2;
+              if (tw < 0.3) continue;
+              const px = mPos.x + Math.sin(i * 3.7 + 1.3) * 36 * (0.4 + s * 0.14);
+              const py = mPos.y + Math.cos(i * 2.9 + 0.7) * 16 * (0.4 + s * 0.14);
+              const r = 2 + tw * 2.5;
+              ctx.strokeStyle = `rgba(253, 230, 138, ${0.35 + tw * 0.6})`;
+              ctx.lineWidth = 1.3;
+              ctx.beginPath();
+              ctx.moveTo(px - r, py);
+              ctx.lineTo(px + r, py);
+              ctx.moveTo(px, py - r);
+              ctx.lineTo(px, py + r);
+              ctx.stroke();
+              ctx.beginPath();
+              ctx.arc(px, py, 1.0, 0, Math.PI * 2);
+              ctx.fillStyle = `rgba(255, 251, 235, ${0.5 + tw * 0.5})`;
+              ctx.fill();
+            }
+          }
+        } else {
+          for (let i = 0; i < 11; i++) {
+            const tw = (Math.sin(slot.bobPhase * 8 + i * 2.1) + 1) / 2;
+            if (tw < 0.3) continue;
+            const px = slot.pos.x + Math.sin(i * 3.7 + 1.3) * 48 * (0.4 + s * 0.14);
+            const py = slot.pos.y + Math.cos(i * 2.9 + 0.7) * 20 * (0.4 + s * 0.14);
+            const r = 2 + tw * 3;
+            ctx.strokeStyle = `rgba(253, 230, 138, ${0.35 + tw * 0.6})`;
+            ctx.lineWidth = 1.4;
+            ctx.beginPath();
+            ctx.moveTo(px - r, py);
+            ctx.lineTo(px + r, py);
+            ctx.moveTo(px, py - r);
+            ctx.lineTo(px, py + r);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(px, py, 1.1, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(255, 251, 235, ${0.5 + tw * 0.5})`;
+            ctx.fill();
+          }
         }
         ctx.restore();
       }
 
       // --- Gill flap + clamp comedy for the active client ---
       const activeSlot = director ? director.active() : null;
-      // The grouper lifts its own drawn operculum; everyone else gets the
+      // The grouper and french grunt trio lift their own drawn opercula; everyone else gets the
       // overlay flap
       if (
         activeSlot &&
         activeSlot.species !== 'grouper' &&
+        activeSlot.species !== 'french_grunt' &&
         activeSlot.cavGill.anchorLocal
       ) {
         const cav = activeSlot.cavGill;
@@ -799,18 +801,6 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
 
       // Clamp bubble bursts
       if (director) {
-        for (const ev of director.drainMucusEvents()) {
-          const fpx = activeSlot ? activeSlot.fish.pos.x : ev.x;
-          const bx = activeSlot && activeSlot.mirrored ? 2 * fpx - ev.x : ev.x;
-          burstsRef.current.push({ x: bx, y: ev.y, age: 0, golden: true });
-          floatersRef.current.push({
-            x: bx,
-            y: ev.y - 14,
-            text: `+${ev.value} mucus!`,
-            color: '#fbbf24',
-            age: 0,
-          });
-        }
         for (const ev of director.drainClampEvents()) {
           const fpx = activeSlot ? activeSlot.fish.pos.x : ev.x;
           const bx = activeSlot && activeSlot.mirrored ? 2 * fpx - ev.x : ev.x;
@@ -892,9 +882,6 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
         }
       }
 
-      if (onChallengeUpdate && director && time - lastStatsSyncRef.current > 150) {
-        onChallengeUpdate(director.challengeInfo());
-      }
       if (active && onParasiteStatsUpdate && time - lastStatsSyncRef.current > 150) {
         lastStatsSyncRef.current = time;
         onParasiteStatsUpdate(active.fish.getParasiteStats());
@@ -919,7 +906,6 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
             elapsedSeconds: Math.floor(active.ageSec),
             transitionCountdown: Math.max(0, Math.ceil(active.patience)),
             patienceFrac: active.patienceMax > 0 ? active.patience / active.patienceMax : 1,
-            isVisitor: active.visitor,
             isVisible: true,
           });
         } else {
@@ -978,8 +964,7 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
       }
       if (queueTargets.length === 0) queueTargets = autoTargets;
 
-      // Nibble juice: a soft green pop for every parasite eaten (plus its
-      // score floating up during a challenge) - the old game's best feel
+      // Nibble juice: a soft green pop for every parasite eaten
       if (active) {
         const sameClient = eatSeenRef.current && eatSeenRef.current.slot === active;
         const seen = sameClient ? eatSeenRef.current!.ids : new Set<number>();
@@ -993,11 +978,7 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
           const x = active.mirrored ? 2 * fpx - x0 : x0;
           const y = active.fish.pos.y + lp.y;
           burstsRef.current.push({ x, y, age: 0, mini: true });
-          const chInfo = director ? director.challengeInfo() : null;
-          if (mode === 'challenge' && chInfo && chInfo.running && !chInfo.over && chInfo.countdown <= 0) {
-            const val = (GATED_PARTS.includes(p.attachPart) ? 20 : 10) * (active.visitor ? 2 : 1);
-            floatersRef.current.push({ x, y: y - 10, text: `+${val}`, color: '#cfe9a8', age: 0 });
-          }
+          playNibbleSound();
         }
         eatSeenRef.current = { slot: active, ids: seen };
       }
@@ -1039,8 +1020,6 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
   }, [
     dimensions,
     isRunning,
-    mode,
-    onChallengeUpdate,
     wrasseScale,
     wrasseSpeed,
     gobiScale,
@@ -1053,19 +1032,40 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
     <div
       ref={containerRef}
       id="fish-canvas-container"
-      className="relative w-full h-full select-none overflow-hidden touch-none"
+      className="relative w-full h-full select-none overflow-hidden touch-none cursor-none"
+      onPointerEnter={(e) => {
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (rect) {
+          setCursor({ x: e.clientX - rect.left, y: e.clientY - rect.top, visible: true });
+        }
+      }}
     >
       <canvas
         ref={canvasRef}
         id="cleaner-wrasse-canvas"
-        className="w-full h-full cursor-pointer"
+        className="w-full h-full cursor-none"
         style={{ width: `${dimensions.width}px`, height: `${dimensions.height}px` }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerLeave={handlePointerUp}
-        onPointerCancel={handlePointerUp}
+        onPointerLeave={handlePointerLeave}
+        onPointerCancel={handlePointerLeave}
       />
+
+      {/* Custom Soothing Light Blue Pulsing Cursor */}
+      {cursor.visible && (
+        <div
+          id="custom-soothing-cursor"
+          className="pointer-events-none absolute z-40 w-[21px] h-[21px] -translate-x-1/2 -translate-y-1/2 rounded-full border-[1.25px] border-sky-300/40 bg-transparent transition-opacity duration-150"
+          style={{
+            left: `${cursor.x}px`,
+            top: `${cursor.y}px`,
+            animation: 'cursorSoothingPulse 2.4s ease-in-out infinite',
+          }}
+        >
+          {/* Subtle inner ambient ring */}
+          <div className="absolute inset-0.5 rounded-full border border-cyan-200/15" />
+        </div>
+      )}
     </div>
   );
 };

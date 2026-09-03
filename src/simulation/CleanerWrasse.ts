@@ -37,23 +37,24 @@ export class CleanerWrasse {
     waveAmplitude: 5.0,
   };
 
-  // Anatomical body half-widths matching the reference low-poly cleaner wrasse silhouette
+  // Anatomical body half-widths matching the juvenile Spanish hogfish (Bodianus rufus)
+  // Streamlined profile with pointed acute snout, gentle dorsal nape, and stout caudal peduncle
   private bodyRadii: number[] = [
-    3.0,  // 0: Snout
-    5.6,  // 1: Head / Eye
-    8.0,  // 2: Operculum
-    9.5,  // 3: Pectoral base / Mid-torso
-    10.2, // 4: Anterior dorsal peak
-    9.8,  // 5: Mid torso
-    8.9,  // 6: Mid-posterior
+    2.7,  // 0: Pointed snout tip
+    5.2,  // 1: Forehead / Eye
+    7.6,  // 2: Nape / Opercular margin
+    9.2,  // 3: Pectoral base / 1st dorsal spine origin
+    9.8,  // 4: Anterior dorsal ridge (moderate, sleek arch)
+    9.5,  // 5: Mid-body
+    8.8,  // 6: Mid-posterior transition
     7.8,  // 7: Anterior anal fin
-    6.6,  // 8: Posterior body
-    5.4,  // 9: Posterior body
-    4.3,  // 10: Peduncle start
-    3.4,  // 11: Caudal peduncle
-    2.7,  // 12: Narrow peduncle
-    2.1,  // 13: Tail base
-    1.6,  // 14: Fin root
+    6.6,  // 8: Rear torso (yellow flank)
+    5.5,  // 9: Rear body
+    4.5,  // 10: Peduncle start
+    3.6,  // 11: Caudal peduncle
+    2.8,  // 12: Narrow peduncle
+    2.2,  // 13: Tail base
+    1.7,  // 14: Caudal fin root
     1.2,  // 15: Caudal tip anchor
   ];
 
@@ -115,6 +116,12 @@ export class CleanerWrasse {
     this.isPointerActive = active;
   }
 
+  public inviteDanceTimer: number = 0;
+
+  public triggerInviteDance(durationSec: number = 2.0) {
+    this.inviteDanceTimer = durationSec * 60;
+  }
+
   public toggleRunning(): boolean {
     this.isRunning = !this.isRunning;
     return this.isRunning;
@@ -168,6 +175,22 @@ export class CleanerWrasse {
       this.headPos.y += this.spitDir.y * kick * safeDt;
       this.swimPhase += 0.35 * safeDt;
       this.finPhase += 0.5 * safeDt;
+      this.applyBoundaryRepulsion(width, height, safeDt);
+      this.updateSpine(safeDt);
+      return;
+    }
+
+    if (this.inviteDanceTimer > 0) {
+      this.inviteDanceTimer -= safeDt;
+      this.behaviorMode = 'dance';
+      this.targetSpeed = 0.5;
+      // Fast, distinct invitation dance with rapid fin flutter and sinusoidal body sway
+      const danceWiggle = Math.sin(this.swimPhase * 3.5) * 0.16;
+      this.heading = normalizeAngle(this.heading + danceWiggle * safeDt);
+      this.headPos.y += Math.sin(this.swimPhase * 2.8) * 1.8 * safeDt;
+      this.finPhase += 0.85 * safeDt;
+      this.swimPhase += 0.7 * safeDt;
+      this.speed = lerp(this.speed, this.targetSpeed, 0.1 * safeDt);
       this.applyBoundaryRepulsion(width, height, safeDt);
       this.updateSpine(safeDt);
       return;
@@ -451,27 +474,30 @@ export class CleanerWrasse {
     this.renderLowPolyAnalFin(ctx, scale);
     this.renderLowPolyPelvicFin(ctx, scale);
 
-    // 3. Render Caudal Tail Fin (Faceted Sapphire Blue with Notched Margin & Central Black Wedge)
+    // 3. Render Caudal Tail Fin (Radiant Sunny Yellow Fan Tail)
     this.renderLowPolyCaudalFin(ctx, scale, tailAnchor);
 
-    // 4. Render Main Low-Poly Faceted Body (Yellow Forehead + Sky Blue + Deep Black Stripe + White Belly)
+    // 4. Render Main Low-Poly Faceted Body (Bicolored: Royal Purple Mantle + Canary Yellow Belly & Flanks + Yellow Snout Ridge)
     this.renderLowPolyBody(ctx, scale, snoutTip, tailAnchor, topPts, upperMidPts, centerPts, lowerMidPts, bottomPts);
 
-    // 5. Render Pectoral Fin (Translucent faceted fan on flank)
+    // 5. Render Pectoral Fin (Translucent golden yellow fan fluttering on flank)
     this.renderLowPolyPectoralFin(ctx, scale);
 
-    // 6. Render Eye & Snout/Mouth Lines matching Reference
+    // 6. Render Eye & Snout/Mouth Lines matching Reference (Golden Iris, Pinkish-Lavender Chin, Pointed Snout)
     this.renderFacialFeatures(ctx, scale, snoutTip);
 
     ctx.restore();
   }
 
   /**
-   * Dorsal Fin: Faceted blue arched sail running from segment 3 to 12
+   * Dorsal Fin: Long continuous sail running from segment 2 to 12.
+   * - Anterior spiny section (seg 2-7): Royal violet/purple membranes with sharp ray spines
+   *   and a dark indigo/blue spot near spines 1-3 (classic juvenile Bodianus rufus trait).
+   * - Posterior soft section (seg 8-12): Radiant sunny canary yellow membranes with spiny ray tips.
    */
   private renderLowPolyDorsalFin(ctx: CanvasRenderingContext2D, scale: number) {
     ctx.save();
-    const segStart = 3;
+    const segStart = 2;
     const segEnd = 12;
 
     const finTopPts: Vector2D[] = [];
@@ -481,14 +507,15 @@ export class CleanerWrasse {
       const seg = this.segments[i];
       const norm = seg.angle + Math.PI / 2;
       const baseR = seg.width;
-      
-      // Height profile peaking in the middle-anterior section like the reference
+
+      // Profile: spiny anterior peak near seg 3-4, then uniform dorsal sail
       const t = (i - segStart) / (segEnd - segStart);
-      const finHeight = (6 + Math.sin(t * Math.PI) * 11) * scale;
+      const isAnteriorSpiny = i <= 5;
+      const finHeight = (isAnteriorSpiny ? 5.2 + Math.sin(t * Math.PI) * 4.2 : 4.6 + Math.sin(t * Math.PI) * 3.2) * scale;
 
       finBasePts.push({
-        x: seg.pos.x + Math.cos(norm) * (baseR * 0.9),
-        y: seg.pos.y + Math.sin(norm) * (baseR * 0.9),
+        x: seg.pos.x + Math.cos(norm) * (baseR * 0.92),
+        y: seg.pos.y + Math.sin(norm) * (baseR * 0.92),
       });
 
       finTopPts.push({
@@ -497,40 +524,60 @@ export class CleanerWrasse {
       });
     }
 
-    // Low-poly palette for dorsal fin
-    const dorsalColors = [
-      '#60a5fa', '#3b82f6', '#2563eb', '#1d4ed8', '#38bdf8', '#2563eb', '#1e40af', '#3b82f6', '#60a5fa'
-    ];
+    // Palette: Purple anterior transition to yellow posterior
+    const purpleFinColors = ['#4c1d95', '#581c87', '#6d28d9', '#7c3aed', '#8b5cf6', '#9333ea'];
+    const yellowFinColors = ['#ca8a04', '#eab308', '#facc15', '#fde047', '#fef08a'];
 
     for (let i = 0; i < finBasePts.length - 1; i++) {
+      const segIdx = segStart + i;
+      const isPurpleZone = segIdx < 7;
+      const isTransition = segIdx === 7;
+
+      let col1: string;
+      let col2: string;
+      if (isPurpleZone) {
+        // Dark indigo spot near first 2 spines (seg 2-3)
+        if (i <= 1) {
+          col1 = '#2e1065';
+          col2 = '#1e1b4b';
+        } else {
+          col1 = purpleFinColors[i % purpleFinColors.length];
+          col2 = purpleFinColors[(i + 1) % purpleFinColors.length];
+        }
+      } else if (isTransition) {
+        col1 = '#7c3aed';
+        col2 = '#eab308';
+      } else {
+        col1 = yellowFinColors[(i - 5) % yellowFinColors.length];
+        col2 = yellowFinColors[(i - 4) % yellowFinColors.length];
+      }
+
       const p1 = finBasePts[i];
       const p2 = finTopPts[i];
       const p3 = finTopPts[i + 1];
       const p4 = finBasePts[i + 1];
 
-      // Lower triangle
-      this.drawTriangle(ctx, p1, p2, p4, dorsalColors[i % dorsalColors.length], 'rgba(255,255,255,0.15)');
-      // Upper triangle
-      const col2 = dorsalColors[(i + 1) % dorsalColors.length];
-      this.drawTriangle(ctx, p2, p3, p4, col2, 'rgba(255,255,255,0.15)');
+      const strokeCol = isPurpleZone ? 'rgba(216, 180, 254, 0.25)' : 'rgba(254, 240, 138, 0.3)';
+      this.drawTriangle(ctx, p1, p2, p4, col1, strokeCol);
+      this.drawTriangle(ctx, p2, p3, p4, col2, strokeCol);
     }
 
-    // Outer edge highlight
+    // Spiny ray tips outline along the crest
     ctx.beginPath();
     ctx.moveTo(finBasePts[0].x, finBasePts[0].y);
     for (let i = 0; i < finTopPts.length; i++) {
       ctx.lineTo(finTopPts[i].x, finTopPts[i].y);
     }
     ctx.lineTo(finBasePts[finBasePts.length - 1].x, finBasePts[finBasePts.length - 1].y);
-    ctx.strokeStyle = 'rgba(147, 197, 253, 0.4)';
-    ctx.lineWidth = 1 * scale;
+    ctx.strokeStyle = 'rgba(254, 240, 138, 0.45)';
+    ctx.lineWidth = 0.9 * scale;
     ctx.stroke();
 
     ctx.restore();
   }
 
   /**
-   * Anal Fin: Ventral rear faceted blue fin
+   * Anal Fin: Ventral rear sunny canary yellow fin (segments 7 to 13)
    */
   private renderLowPolyAnalFin(ctx: CanvasRenderingContext2D, scale: number) {
     ctx.save();
@@ -546,11 +593,11 @@ export class CleanerWrasse {
       const baseR = seg.width;
 
       const t = (i - segStart) / (segEnd - segStart);
-      const finHeight = (5 + Math.sin(t * Math.PI) * 7.5) * scale;
+      const finHeight = (5.5 + Math.sin(t * Math.PI) * 7.0) * scale;
 
       finBasePts.push({
-        x: seg.pos.x + Math.cos(norm) * (baseR * 0.9),
-        y: seg.pos.y + Math.sin(norm) * (baseR * 0.9),
+        x: seg.pos.x + Math.cos(norm) * (baseR * 0.92),
+        y: seg.pos.y + Math.sin(norm) * (baseR * 0.92),
       });
 
       finTipPts.push({
@@ -559,7 +606,7 @@ export class CleanerWrasse {
       });
     }
 
-    const analColors = ['#3b82f6', '#2563eb', '#1d4ed8', '#38bdf8', '#2563eb', '#1e40af'];
+    const analColors = ['#ca8a04', '#eab308', '#facc15', '#fde047', '#fef08a', '#eab308'];
 
     for (let i = 0; i < finBasePts.length - 1; i++) {
       const p1 = finBasePts[i];
@@ -567,45 +614,45 @@ export class CleanerWrasse {
       const p3 = finTipPts[i + 1];
       const p4 = finBasePts[i + 1];
 
-      this.drawTriangle(ctx, p1, p2, p4, analColors[i % analColors.length], 'rgba(255,255,255,0.12)');
-      this.drawTriangle(ctx, p2, p3, p4, analColors[(i + 1) % analColors.length], 'rgba(255,255,255,0.12)');
+      this.drawTriangle(ctx, p1, p2, p4, analColors[i % analColors.length], 'rgba(255, 255, 255, 0.2)');
+      this.drawTriangle(ctx, p2, p3, p4, analColors[(i + 1) % analColors.length], 'rgba(255, 255, 255, 0.2)');
     }
 
     ctx.restore();
   }
 
   /**
-   * Pelvic / Ventral Fin: Small pointed faceted fin on belly near segment 4
+   * Pelvic / Ventral Fin: Vibrant sunny canary yellow triangular fins on belly (segment 3-4)
    */
   private renderLowPolyPelvicFin(ctx: CanvasRenderingContext2D, scale: number) {
     ctx.save();
-    const seg = this.segments[4];
+    const seg = this.segments[3];
     const norm = seg.angle - Math.PI / 2;
     const base1 = {
       x: seg.pos.x + Math.cos(norm) * (seg.width * 0.9),
       y: seg.pos.y + Math.sin(norm) * (seg.width * 0.9),
     };
-    const nextSeg = this.segments[5];
+    const nextSeg = this.segments[4];
     const nextNorm = nextSeg.angle - Math.PI / 2;
     const base2 = {
       x: nextSeg.pos.x + Math.cos(nextNorm) * (nextSeg.width * 0.9),
       y: nextSeg.pos.y + Math.sin(nextNorm) * (nextSeg.width * 0.9),
     };
 
-    // Pointed tip extending backwards & downwards
-    const tipAngle = seg.angle - Math.PI / 2 - 0.45;
+    // Pointed triangular tip extending backwards & downwards
+    const tipAngle = seg.angle - Math.PI / 2 - 0.42;
     const tip = {
-      x: base1.x + Math.cos(tipAngle) * (14 * scale),
-      y: base1.y + Math.sin(tipAngle) * (14 * scale),
+      x: base1.x + Math.cos(tipAngle) * (14.5 * scale),
+      y: base1.y + Math.sin(tipAngle) * (14.5 * scale),
     };
 
-    this.drawTriangle(ctx, base1, tip, base2, '#3b82f6', 'rgba(255,255,255,0.2)');
+    this.drawTriangle(ctx, base1, tip, base2, '#facc15', 'rgba(255, 255, 255, 0.28)');
     ctx.restore();
   }
 
   /**
-   * Caudal (Tail) Fin: Faceted sapphire blue with distinct double notch / emarginate trailing edge
-   * and deep black central wedge continuation from reference image.
+   * Caudal (Tail) Fin: Broad fan-shaped canary yellow caudal fin matching the reference juvenile Spanish Hogfish.
+   * Completely vibrant yellow with radiating fin rays and soft trailing edge.
    */
   private renderLowPolyCaudalFin(ctx: CanvasRenderingContext2D, scale: number, tailAnchor: Vector2D) {
     ctx.save();
@@ -614,83 +661,86 @@ export class CleanerWrasse {
     const waveWiggle = Math.sin(this.swimPhase - 5.5) * 0.16;
     const effectiveAngle = tailAngle + Math.PI + waveWiggle;
 
-    const tailLen = 34 * scale;
-    const tailSpan = 22 * scale;
+    const tailLen = 33 * scale;
 
     // Tail anchor top & bottom
     const anchorNorm = tailSeg.angle + Math.PI / 2;
     const anchorTop = {
-      x: tailAnchor.x + Math.cos(anchorNorm) * (4 * scale),
-      y: tailAnchor.y + Math.sin(anchorNorm) * (4 * scale),
+      x: tailAnchor.x + Math.cos(anchorNorm) * (4.5 * scale),
+      y: tailAnchor.y + Math.sin(anchorNorm) * (4.5 * scale),
     };
     const anchorBottom = {
-      x: tailAnchor.x - Math.cos(anchorNorm) * (4 * scale),
-      y: tailAnchor.y - Math.sin(anchorNorm) * (4 * scale),
+      x: tailAnchor.x - Math.cos(anchorNorm) * (4.5 * scale),
+      y: tailAnchor.y - Math.sin(anchorNorm) * (4.5 * scale),
     };
 
-    // Trailing notched points matching reference
+    // Broad fan rays radiating out in vibrant canary yellow
     const topOuterCorner = {
-      x: tailAnchor.x + Math.cos(effectiveAngle - 0.58) * tailLen,
-      y: tailAnchor.y + Math.sin(effectiveAngle - 0.58) * tailLen,
+      x: tailAnchor.x + Math.cos(effectiveAngle - 0.62) * tailLen,
+      y: tailAnchor.y + Math.sin(effectiveAngle - 0.62) * tailLen,
     };
-    const topNotch = {
-      x: tailAnchor.x + Math.cos(effectiveAngle - 0.28) * (tailLen * 0.88),
-      y: tailAnchor.y + Math.sin(effectiveAngle - 0.28) * (tailLen * 0.88),
+    const topMidRay = {
+      x: tailAnchor.x + Math.cos(effectiveAngle - 0.32) * (tailLen * 0.96),
+      y: tailAnchor.y + Math.sin(effectiveAngle - 0.32) * (tailLen * 0.96),
     };
-    const centerTip = {
-      x: tailAnchor.x + Math.cos(effectiveAngle) * (tailLen * 0.98),
-      y: tailAnchor.y + Math.sin(effectiveAngle) * (tailLen * 0.98),
+    const centerTrailingTip = {
+      x: tailAnchor.x + Math.cos(effectiveAngle) * (tailLen * 0.92),
+      y: tailAnchor.y + Math.sin(effectiveAngle) * (tailLen * 0.92),
     };
-    const bottomNotch = {
-      x: tailAnchor.x + Math.cos(effectiveAngle + 0.28) * (tailLen * 0.88),
-      y: tailAnchor.y + Math.sin(effectiveAngle + 0.28) * (tailLen * 0.88),
+    const bottomMidRay = {
+      x: tailAnchor.x + Math.cos(effectiveAngle + 0.32) * (tailLen * 0.96),
+      y: tailAnchor.y + Math.sin(effectiveAngle + 0.32) * (tailLen * 0.96),
     };
     const bottomOuterCorner = {
-      x: tailAnchor.x + Math.cos(effectiveAngle + 0.58) * tailLen,
-      y: tailAnchor.y + Math.sin(effectiveAngle + 0.58) * tailLen,
+      x: tailAnchor.x + Math.cos(effectiveAngle + 0.62) * tailLen,
+      y: tailAnchor.y + Math.sin(effectiveAngle + 0.62) * tailLen,
     };
 
-    // Mid-tail black wedge anchor point
-    const blackWedgeTip = {
-      x: tailAnchor.x + Math.cos(effectiveAngle) * (tailLen * 0.55),
-      y: tailAnchor.y + Math.sin(effectiveAngle) * (tailLen * 0.55),
-    };
-    const blackWedgeTop = {
-      x: tailAnchor.x + Math.cos(effectiveAngle - 0.3) * (tailLen * 0.45),
-      y: tailAnchor.y + Math.sin(effectiveAngle - 0.3) * (tailLen * 0.45),
-    };
-    const blackWedgeBottom = {
-      x: tailAnchor.x + Math.cos(effectiveAngle + 0.3) * (tailLen * 0.45),
-      y: tailAnchor.y + Math.sin(effectiveAngle + 0.3) * (tailLen * 0.45),
+    // Inner mid-fan anchor point for faceted depth
+    const midFan = {
+      x: tailAnchor.x + Math.cos(effectiveAngle) * (tailLen * 0.48),
+      y: tailAnchor.y + Math.sin(effectiveAngle) * (tailLen * 0.48),
     };
 
-    // 1. Faceted sapphire blue upper tail lobe
-    this.drawTriangle(ctx, anchorTop, topOuterCorner, topNotch, '#2563eb', 'rgba(255,255,255,0.18)');
-    this.drawTriangle(ctx, anchorTop, topNotch, blackWedgeTop, '#1d4ed8', 'rgba(255,255,255,0.18)');
-    this.drawTriangle(ctx, topNotch, centerTip, blackWedgeTip, '#3b82f6', 'rgba(255,255,255,0.18)');
-    this.drawTriangle(ctx, topNotch, blackWedgeTop, blackWedgeTip, '#1e40af', 'rgba(255,255,255,0.18)');
+    // Triangulate radiant yellow fan rays
+    this.drawTriangle(ctx, anchorTop, topOuterCorner, topMidRay, '#facc15', 'rgba(255, 255, 255, 0.25)');
+    this.drawTriangle(ctx, anchorTop, topMidRay, midFan, '#fde047', 'rgba(255, 255, 255, 0.22)');
+    this.drawTriangle(ctx, topMidRay, centerTrailingTip, midFan, '#eab308', 'rgba(255, 255, 255, 0.22)');
 
-    // 2. Faceted sapphire blue lower tail lobe
-    this.drawTriangle(ctx, anchorBottom, bottomOuterCorner, bottomNotch, '#1d4ed8', 'rgba(255,255,255,0.18)');
-    this.drawTriangle(ctx, anchorBottom, bottomNotch, blackWedgeBottom, '#2563eb', 'rgba(255,255,255,0.18)');
-    this.drawTriangle(ctx, bottomNotch, centerTip, blackWedgeTip, '#1e40af', 'rgba(255,255,255,0.18)');
-    this.drawTriangle(ctx, bottomNotch, blackWedgeBottom, blackWedgeTip, '#3b82f6', 'rgba(255,255,255,0.18)');
+    this.drawTriangle(ctx, anchorBottom, bottomMidRay, bottomOuterCorner, '#facc15', 'rgba(255, 255, 255, 0.25)');
+    this.drawTriangle(ctx, anchorBottom, midFan, bottomMidRay, '#fde047', 'rgba(255, 255, 255, 0.22)');
+    this.drawTriangle(ctx, bottomMidRay, midFan, centerTrailingTip, '#eab308', 'rgba(255, 255, 255, 0.22)');
 
-    // 3. Central Black Wedge inside tail (iconic cleaner wrasse marking from reference)
-    this.drawTriangle(ctx, tailAnchor, anchorTop, blackWedgeTop, '#05070c', 'rgba(255,255,255,0.1)');
-    this.drawTriangle(ctx, tailAnchor, blackWedgeTop, blackWedgeTip, '#0b111e', 'rgba(255,255,255,0.1)');
-    this.drawTriangle(ctx, tailAnchor, blackWedgeTip, blackWedgeBottom, '#080d17', 'rgba(255,255,255,0.1)');
-    this.drawTriangle(ctx, tailAnchor, anchorBottom, blackWedgeBottom, '#040609', 'rgba(255,255,255,0.1)');
+    this.drawTriangle(ctx, tailAnchor, anchorTop, midFan, '#eab308', 'rgba(255, 255, 255, 0.15)');
+    this.drawTriangle(ctx, tailAnchor, midFan, anchorBottom, '#ca8a04', 'rgba(255, 255, 255, 0.15)');
+
+    // Delicate radiating ray strokes
+    ctx.beginPath();
+    ctx.moveTo(anchorTop.x, anchorTop.y);
+    ctx.lineTo(topOuterCorner.x, topOuterCorner.y);
+    ctx.moveTo(tailAnchor.x, tailAnchor.y);
+    ctx.lineTo(topMidRay.x, topMidRay.y);
+    ctx.moveTo(tailAnchor.x, tailAnchor.y);
+    ctx.lineTo(centerTrailingTip.x, centerTrailingTip.y);
+    ctx.moveTo(tailAnchor.x, tailAnchor.y);
+    ctx.lineTo(bottomMidRay.x, bottomMidRay.y);
+    ctx.moveTo(anchorBottom.x, anchorBottom.y);
+    ctx.lineTo(bottomOuterCorner.x, bottomOuterCorner.y);
+    ctx.strokeStyle = 'rgba(254, 240, 138, 0.45)';
+    ctx.lineWidth = 0.8 * scale;
+    ctx.stroke();
 
     ctx.restore();
   }
 
   /**
    * Main Low-Poly Body Mesh:
-   * - Forehead / Top Snout: Bright Yellow / Gold band (#facc15 / #eab308) from snout tip to segment 3.
-   * - Upper Dorsal Band: Faceted Sky Blue / Cerulean (#38bdf8 / #60a5fa / #0284c7)
-   * - Central Horizontal Band: Thick bold deep black stripe (#030712 / #0b1329)
-   * - Ventral Belly: Pure faceted white / pale grey (#ffffff / #f1f5f9 / #e2e8f0)
+   * Accurately reproduces the bicolored juvenile Spanish Hogfish (Bodianus rufus) from the reference image:
+   * - Forehead & Snout: Bright golden yellow dorsal ridge on upper snout + pale lavender/pinkish chin and throat.
+   * - Dorsal Mantle / Cape: Deep royal violet / vivid purple (#7c3aed, #6d28d9, #581c87, #4c1d95) covering upper head and back.
+   * - Reticulated Scale Texture: Faceted mesh highlighting the distinctive textured scale rows of the purple mantle.
+   * - Transition: Diagonal sloping boundary where purple scales scatter into sunny yellow.
+   * - Belly & Posterior: Pure radiant sunny canary yellow (#fde047, #facc15, #eab308) across entire flank, belly, and caudal peduncle.
    */
   private renderLowPolyBody(
     ctx: CanvasRenderingContext2D,
@@ -705,123 +755,167 @@ export class CleanerWrasse {
   ) {
     ctx.save();
 
-    // --- 1. Snout Forehead & Head Cap (Yellow band on forehead like reference) ---
-    // The reference has a distinct yellow ridge starting at the very tip of the upper snout and running along the dorsal crest to the dorsal fin start!
-    const yellowPalette = ['#fde047', '#facc15', '#eab308', '#ca8a04'];
-    const skyBluePalette = ['#7dd3fc', '#38bdf8', '#0ea5e9', '#0284c7', '#2563eb', '#60a5fa', '#93c5fd'];
-    const blackPalette = ['#020617', '#090d16', '#0f172a', '#05070c', '#0c121e', '#111827'];
-    const whitePalette = ['#ffffff', '#f8fafc', '#f1f5f9', '#e2e8f0', '#cbd5e1', '#e2e8f0'];
+    const purplePalette = ['#6d28d9', '#7c3aed', '#581c87', '#4c1d95', '#8b5cf6', '#9333ea'];
+    const yellowPalette = ['#fde047', '#facc15', '#eab308', '#ca8a04', '#fef08a'];
+    const lavenderPalette = ['#f3e8ff', '#e9d5ff', '#fae8ff', '#fce7f3', '#f5d0fe'];
 
     const segCount = this.segments.length;
 
-    // Connect Snout tip to first segment rings
-    // Snout to Top (Yellow)
-    this.drawTriangle(ctx, snoutTip, topPts[0], topPts[1], yellowPalette[0], 'rgba(255,255,255,0.2)');
-    this.drawTriangle(ctx, snoutTip, topPts[1], upperMidPts[1], yellowPalette[1], 'rgba(255,255,255,0.2)');
+    // --- 1. Snout Forehead, Lips & Throat ---
+    // Snout dorsal ridge: bright golden yellow
+    this.drawTriangle(ctx, snoutTip, topPts[0], topPts[1], '#fde047', 'rgba(255, 255, 255, 0.25)');
+    this.drawTriangle(ctx, snoutTip, topPts[1], upperMidPts[1], '#facc15', 'rgba(255, 255, 255, 0.25)');
 
-    // Snout to Center (Black stripe tip)
-    this.drawTriangle(ctx, snoutTip, upperMidPts[1], centerPts[1], blackPalette[0], 'rgba(255,255,255,0.15)');
-    this.drawTriangle(ctx, snoutTip, centerPts[1], lowerMidPts[1], blackPalette[1], 'rgba(255,255,255,0.15)');
+    // Snout upper flank: royal purple leading to eye
+    this.drawTriangle(ctx, snoutTip, upperMidPts[1], centerPts[1], '#7c3aed', 'rgba(255, 255, 255, 0.2)');
+    this.drawTriangle(ctx, snoutTip, centerPts[1], lowerMidPts[1], '#6d28d9', 'rgba(255, 255, 255, 0.18)');
 
-    // Snout to Bottom (White lower jaw)
-    this.drawTriangle(ctx, snoutTip, lowerMidPts[1], bottomPts[1], whitePalette[0], 'rgba(0,0,0,0.08)');
-    this.drawTriangle(ctx, snoutTip, bottomPts[0], bottomPts[1], whitePalette[1], 'rgba(0,0,0,0.08)');
+    // Snout lower jaw & chin: pale lavender-pink (matching reference photo)
+    this.drawTriangle(ctx, snoutTip, lowerMidPts[1], bottomPts[1], '#e9d5ff', 'rgba(255, 255, 255, 0.15)');
+    this.drawTriangle(ctx, snoutTip, bottomPts[0], bottomPts[1], '#f3e8ff', 'rgba(255, 255, 255, 0.15)');
 
-    // --- 2. Iterate spine rings and create faceted low-poly quad strips ---
+    // --- 2. Iterate spine rings and create faceted low-poly quad strips with scale lattice ---
     for (let i = 1; i < segCount - 1; i++) {
       // --- LAYER A: Top Dorsal Zone ---
-      // For segments 1 to 3, top facet is YELLOW (Forehead crest from reference)
-      // For segments >= 4, top facet is SKY BLUE / CYAN
-      const isYellowForehead = i <= 3;
-      const topCol1 = isYellowForehead
-        ? yellowPalette[i % yellowPalette.length]
-        : skyBluePalette[(i * 2) % skyBluePalette.length];
-      const topCol2 = isYellowForehead
-        ? yellowPalette[(i + 1) % yellowPalette.length]
-        : skyBluePalette[(i * 2 + 1) % skyBluePalette.length];
+      // For segments 1 to 7: Royal purple dorsal mantle / arched nape
+      // For segments >= 8: Sunny canary yellow dorsal margin
+      const isDorsalPurple = i <= 6;
+      const isDorsalTransition = i === 7;
 
-      this.drawTriangle(ctx, topPts[i], topPts[i + 1], upperMidPts[i], topCol1, 'rgba(255,255,255,0.2)');
-      this.drawTriangle(ctx, topPts[i + 1], upperMidPts[i + 1], upperMidPts[i], topCol2, 'rgba(255,255,255,0.2)');
+      let topCol1: string;
+      let topCol2: string;
+      if (isDorsalPurple) {
+        topCol1 = purplePalette[i % purplePalette.length];
+        topCol2 = purplePalette[(i + 1) % purplePalette.length];
+      } else if (isDorsalTransition) {
+        topCol1 = '#8b5cf6';
+        topCol2 = '#facc15';
+      } else {
+        topCol1 = yellowPalette[(i - 6) % yellowPalette.length];
+        topCol2 = yellowPalette[(i - 5) % yellowPalette.length];
+      }
 
-      // --- LAYER B: Upper Blue Stripe Zone (Between Top and Black stripe) ---
-      // For head, this is bright cyan blue; for body, cerulean blue
-      const blueCol1 = skyBluePalette[(i + 1) % skyBluePalette.length];
-      const blueCol2 = skyBluePalette[(i + 2) % skyBluePalette.length];
-      this.drawTriangle(ctx, upperMidPts[i], upperMidPts[i + 1], centerPts[i], blueCol1, 'rgba(255,255,255,0.18)');
-      this.drawTriangle(ctx, upperMidPts[i + 1], centerPts[i + 1], centerPts[i], blueCol2, 'rgba(255,255,255,0.18)');
+      const topStroke = isDorsalPurple ? 'rgba(216, 180, 254, 0.25)' : 'rgba(254, 240, 138, 0.25)';
+      this.drawTriangle(ctx, topPts[i], topPts[i + 1], upperMidPts[i], topCol1, topStroke);
+      this.drawTriangle(ctx, topPts[i + 1], upperMidPts[i + 1], upperMidPts[i], topCol2, topStroke);
 
-      // --- LAYER C: Central Black Lateral Stripe ---
-      // Thick bold dark navy / black stripe passing through eye to tail
-      const blackCol1 = blackPalette[i % blackPalette.length];
-      const blackCol2 = blackPalette[(i + 1) % blackPalette.length];
-      this.drawTriangle(ctx, centerPts[i], centerPts[i + 1], lowerMidPts[i], blackCol1, 'rgba(255,255,255,0.1)');
-      this.drawTriangle(ctx, centerPts[i + 1], lowerMidPts[i + 1], lowerMidPts[i], blackCol2, 'rgba(255,255,255,0.1)');
+      // --- LAYER B: Upper Lateral Zone (Reticulated scale pattern on purple cape) ---
+      // Purple from seg 1 to 6; transition at 7; sunny yellow from seg 8 onward
+      let midCol1: string;
+      let midCol2: string;
+      if (i <= 5) {
+        midCol1 = purplePalette[(i + 2) % purplePalette.length];
+        midCol2 = purplePalette[(i + 3) % purplePalette.length];
+      } else if (i === 6) {
+        midCol1 = '#7c3aed';
+        midCol2 = '#eab308'; // Mottled transition scale
+      } else if (i === 7) {
+        midCol1 = '#9333ea';
+        midCol2 = '#fde047';
+      } else {
+        midCol1 = yellowPalette[(i - 5) % yellowPalette.length];
+        midCol2 = yellowPalette[(i - 4) % yellowPalette.length];
+      }
 
-      // --- LAYER D: Ventral Belly (Pure crisp White / Pale silver facets) ---
-      const whiteCol1 = whitePalette[i % whitePalette.length];
-      const whiteCol2 = whitePalette[(i + 1) % whitePalette.length];
-      this.drawTriangle(ctx, lowerMidPts[i], lowerMidPts[i + 1], bottomPts[i], whiteCol1, 'rgba(0,0,0,0.06)');
-      this.drawTriangle(ctx, lowerMidPts[i + 1], bottomPts[i + 1], bottomPts[i], whiteCol2, 'rgba(0,0,0,0.06)');
+      const midStroke = i <= 6 ? 'rgba(216, 180, 254, 0.22)' : 'rgba(254, 240, 138, 0.22)';
+      this.drawTriangle(ctx, upperMidPts[i], upperMidPts[i + 1], centerPts[i], midCol1, midStroke);
+      this.drawTriangle(ctx, upperMidPts[i + 1], centerPts[i + 1], centerPts[i], midCol2, midStroke);
+
+      // --- LAYER C: Lower Lateral Zone ---
+      // Head/cheek has mauve/amber flush; mid-body starts yellow belly earlier (seg 4-5)
+      let lowCol1: string;
+      let lowCol2: string;
+      if (i <= 2) {
+        lowCol1 = '#8b5cf6';
+        lowCol2 = '#7c3aed';
+      } else if (i === 3) {
+        lowCol1 = '#7c3aed';
+        lowCol2 = '#f59e0b'; // Amber transition near pectoral
+      } else if (i === 4) {
+        lowCol1 = '#eab308';
+        lowCol2 = '#facc15';
+      } else {
+        lowCol1 = yellowPalette[i % yellowPalette.length];
+        lowCol2 = yellowPalette[(i + 1) % yellowPalette.length];
+      }
+
+      const lowStroke = i <= 3 ? 'rgba(216, 180, 254, 0.2)' : 'rgba(254, 240, 138, 0.2)';
+      this.drawTriangle(ctx, centerPts[i], centerPts[i + 1], lowerMidPts[i], lowCol1, lowStroke);
+      this.drawTriangle(ctx, centerPts[i + 1], lowerMidPts[i + 1], lowerMidPts[i], lowCol2, lowStroke);
+
+      // --- LAYER D: Ventral Belly (Pale lavender throat into pure sunny canary yellow belly) ---
+      let bellyCol1: string;
+      let bellyCol2: string;
+      if (i <= 2) {
+        bellyCol1 = lavenderPalette[i % lavenderPalette.length];
+        bellyCol2 = lavenderPalette[(i + 1) % lavenderPalette.length];
+      } else {
+        bellyCol1 = yellowPalette[i % yellowPalette.length];
+        bellyCol2 = yellowPalette[(i + 1) % yellowPalette.length];
+      }
+
+      const bellyStroke = i <= 2 ? 'rgba(255, 255, 255, 0.15)' : 'rgba(254, 240, 138, 0.2)';
+      this.drawTriangle(ctx, lowerMidPts[i], lowerMidPts[i + 1], bottomPts[i], bellyCol1, bellyStroke);
+      this.drawTriangle(ctx, lowerMidPts[i + 1], bottomPts[i + 1], bottomPts[i], bellyCol2, bellyStroke);
     }
 
-    // --- 3. Close mesh at tail anchor ---
+    // --- 3. Close mesh at caudal peduncle / tail anchor in bright sunny yellow ---
     const last = segCount - 1;
     const prev = segCount - 2;
 
-    this.drawTriangle(ctx, topPts[prev], tailAnchor, upperMidPts[prev], skyBluePalette[3], 'rgba(255,255,255,0.2)');
-    this.drawTriangle(ctx, upperMidPts[prev], tailAnchor, centerPts[prev], blackPalette[2], 'rgba(255,255,255,0.1)');
-    this.drawTriangle(ctx, centerPts[prev], tailAnchor, lowerMidPts[prev], blackPalette[3], 'rgba(255,255,255,0.1)');
-    this.drawTriangle(ctx, lowerMidPts[prev], tailAnchor, bottomPts[prev], whitePalette[2], 'rgba(0,0,0,0.06)');
+    this.drawTriangle(ctx, topPts[prev], tailAnchor, upperMidPts[prev], '#fde047', 'rgba(254, 240, 138, 0.25)');
+    this.drawTriangle(ctx, upperMidPts[prev], tailAnchor, centerPts[prev], '#facc15', 'rgba(254, 240, 138, 0.25)');
+    this.drawTriangle(ctx, centerPts[prev], tailAnchor, lowerMidPts[prev], '#eab308', 'rgba(254, 240, 138, 0.25)');
+    this.drawTriangle(ctx, lowerMidPts[prev], tailAnchor, bottomPts[prev], '#facc15', 'rgba(254, 240, 138, 0.25)');
 
     ctx.restore();
   }
 
   /**
-   * Pectoral Fin: Fan-like fin on lower side of body with subtle radial ribs matching reference
+   * Pectoral Fin: Fan-like translucent sunny yellow/golden fin fluttering on the lateral flank
    */
   private renderLowPolyPectoralFin(ctx: CanvasRenderingContext2D, scale: number) {
     ctx.save();
-    const seg = this.segments[3];
+    const seg = this.segments[2];
     const normal = seg.angle + Math.PI / 2;
 
     const finLen = 16 * scale;
     const flutterAmp = this.isRunning ? Math.sin(this.finPhase * 2.6) * 0.42 : Math.sin(this.finPhase) * 0.12;
 
-    // Both sides (upper and lower perspective)
-    for (const side of [1, -1]) {
-      const root = {
-        x: seg.pos.x + Math.cos(normal * side) * (seg.width * 0.45),
-        y: seg.pos.y + Math.sin(normal * side) * (seg.width * 0.45),
-      };
+    // Single lateral pectoral fin on the visible flank (slightly below midline)
+    const root = {
+      x: seg.pos.x - Math.cos(normal) * (seg.width * 0.22) - Math.cos(seg.angle) * (1.5 * scale),
+      y: seg.pos.y - Math.sin(normal) * (seg.width * 0.22) - Math.sin(seg.angle) * (1.5 * scale),
+    };
 
-      const finBaseAngle = seg.angle + (Math.PI * 0.78 * side) + flutterAmp * side;
+    const finBaseAngle = seg.angle + Math.PI - 0.28 + flutterAmp;
 
-      // 4 low-poly fan ribs
-      const rib1 = {
-        x: root.x + Math.cos(finBaseAngle - 0.25 * side) * (finLen * 0.75),
-        y: root.y + Math.sin(finBaseAngle - 0.25 * side) * (finLen * 0.75),
-      };
-      const rib2 = {
-        x: root.x + Math.cos(finBaseAngle) * finLen,
-        y: root.y + Math.sin(finBaseAngle) * finLen,
-      };
-      const rib3 = {
-        x: root.x + Math.cos(finBaseAngle + 0.25 * side) * (finLen * 0.9),
-        y: root.y + Math.sin(finBaseAngle + 0.25 * side) * (finLen * 0.9),
-      };
+    // 3 low-poly fan ribs in translucent sunny yellow
+    const rib1 = {
+      x: root.x + Math.cos(finBaseAngle - 0.22) * (finLen * 0.75),
+      y: root.y + Math.sin(finBaseAngle - 0.22) * (finLen * 0.75),
+    };
+    const rib2 = {
+      x: root.x + Math.cos(finBaseAngle) * finLen,
+      y: root.y + Math.sin(finBaseAngle) * finLen,
+    };
+    const rib3 = {
+      x: root.x + Math.cos(finBaseAngle + 0.22) * (finLen * 0.88),
+      y: root.y + Math.sin(finBaseAngle + 0.22) * (finLen * 0.88),
+    };
 
-      this.drawTriangle(ctx, root, rib1, rib2, 'rgba(96, 165, 250, 0.65)', 'rgba(255,255,255,0.3)');
-      this.drawTriangle(ctx, root, rib2, rib3, 'rgba(59, 130, 246, 0.75)', 'rgba(255,255,255,0.3)');
-    }
+    this.drawTriangle(ctx, root, rib1, rib2, 'rgba(250, 204, 21, 0.75)', 'rgba(254, 240, 138, 0.4)');
+    this.drawTriangle(ctx, root, rib2, rib3, 'rgba(234, 179, 8, 0.82)', 'rgba(254, 240, 138, 0.4)');
 
     ctx.restore();
   }
 
   /**
    * Facial Features:
-   * - Large dark round eye on black stripe with glossy catchlight
-   * - Dark mouth slit on snout tip
-   * - Operculum / Gill divider line
+   * - Single profile eye with radiant golden-yellow iris matching reference photo
+   * - Delicate coral/pink mouth slit on pointed snout tip
+   * - Amber/orange opercular cheek glow
+   * - Opercular gill line on visible flank
    */
   private renderFacialFeatures(ctx: CanvasRenderingContext2D, scale: number, snoutTip: Vector2D) {
     ctx.save();
@@ -829,77 +923,91 @@ export class CleanerWrasse {
     const headAngle = head.angle;
     const norm = headAngle + Math.PI / 2;
 
-    // Eyes on left & right
-    const eyeOffsetFwd = 3.2 * scale;
-    const eyeOffsetLat = head.width * 0.55;
+    // Single lateral eye for profile view: situated on upper flank between midline and forehead ridge
+    const eyeOffsetFwd = 2.4 * scale;
+    const eyeOffsetLat = head.width * 0.16;
 
-    for (const side of [1, -1]) {
-      const eyeX = head.pos.x + Math.cos(headAngle) * eyeOffsetFwd + Math.cos(norm * side) * eyeOffsetLat;
-      const eyeY = head.pos.y + Math.sin(headAngle) * eyeOffsetFwd + Math.sin(norm * side) * eyeOffsetLat;
+    const eyeX = head.pos.x + Math.cos(headAngle) * eyeOffsetFwd + Math.cos(norm) * eyeOffsetLat;
+    const eyeY = head.pos.y + Math.sin(headAngle) * eyeOffsetFwd + Math.sin(norm) * eyeOffsetLat;
 
-      // Dark Iris Ring
-      ctx.beginPath();
-      ctx.arc(eyeX, eyeY, 3.2 * scale, 0, Math.PI * 2);
-      ctx.fillStyle = '#0f172a';
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(56, 189, 248, 0.4)';
-      ctx.lineWidth = 0.8 * scale;
-      ctx.stroke();
+    // Warm Amber Opercular Flush behind the eye
+    ctx.beginPath();
+    ctx.arc(
+      eyeX - Math.cos(headAngle) * (2.8 * scale),
+      eyeY - Math.sin(headAngle) * (2.8 * scale),
+      3.8 * scale,
+      0,
+      Math.PI * 2
+    );
+    ctx.fillStyle = 'rgba(245, 158, 11, 0.35)';
+    ctx.fill();
 
-      // Deep Black Pupil
-      ctx.beginPath();
-      ctx.arc(eyeX, eyeY, 2.3 * scale, 0, Math.PI * 2);
-      ctx.fillStyle = '#020617';
-      ctx.fill();
+    // Golden-Yellow Iris (distinctive Bodianus rufus trait from reference image)
+    ctx.beginPath();
+    ctx.arc(eyeX, eyeY, 3.4 * scale, 0, Math.PI * 2);
+    ctx.fillStyle = '#facc15';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(202, 138, 4, 0.7)';
+    ctx.lineWidth = 0.8 * scale;
+    ctx.stroke();
 
-      // Crisp White Catchlight
-      ctx.beginPath();
-      ctx.arc(
-        eyeX + Math.cos(headAngle - 0.7 * side) * (0.9 * scale),
-        eyeY + Math.sin(headAngle - 0.7 * side) * (0.9 * scale),
-        0.85 * scale,
-        0,
-        Math.PI * 2
-      );
-      ctx.fillStyle = '#ffffff';
-      ctx.fill();
-    }
+    // Fine dark inner ring
+    ctx.beginPath();
+    ctx.arc(eyeX, eyeY, 2.5 * scale, 0, Math.PI * 2);
+    ctx.fillStyle = '#1e1b4b';
+    ctx.fill();
 
-    // Mouth slit line on snout tip
+    // Deep Black Pupil
+    ctx.beginPath();
+    ctx.arc(eyeX, eyeY, 1.9 * scale, 0, Math.PI * 2);
+    ctx.fillStyle = '#020617';
+    ctx.fill();
+
+    // Crisp White Catchlight
+    ctx.beginPath();
+    ctx.arc(
+      eyeX + Math.cos(headAngle - 0.7) * (0.95 * scale),
+      eyeY + Math.sin(headAngle - 0.7) * (0.95 * scale),
+      0.85 * scale,
+      0,
+      Math.PI * 2
+    );
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+
+    // Delicate coral-pink mouth slit on pointed snout tip
     ctx.beginPath();
     ctx.moveTo(snoutTip.x, snoutTip.y);
     ctx.lineTo(
-      snoutTip.x - Math.cos(headAngle) * (5 * scale),
-      snoutTip.y - Math.sin(headAngle) * (5 * scale)
+      snoutTip.x - Math.cos(headAngle) * (5.5 * scale),
+      snoutTip.y - Math.sin(headAngle) * (5.5 * scale)
     );
-    ctx.strokeStyle = '#020617';
+    ctx.strokeStyle = '#f43f5e';
     ctx.lineWidth = 1.2 * scale;
     ctx.stroke();
 
-    // Operculum (Gill line)
+    // Operculum (Single curved gill line on visible lateral flank)
     const gillSeg = this.segments[2];
     const gillNorm = gillSeg.angle + Math.PI / 2;
-    for (const side of [1, -1]) {
-      const gTop = {
-        x: gillSeg.pos.x + Math.cos(gillNorm * side) * (gillSeg.width * 0.8),
-        y: gillSeg.pos.y + Math.sin(gillNorm * side) * (gillSeg.width * 0.8),
-      };
-      const gMid = {
-        x: gillSeg.pos.x - Math.cos(gillSeg.angle) * (2 * scale) + Math.cos(gillNorm * side) * (gillSeg.width * 0.2),
-        y: gillSeg.pos.y - Math.sin(gillSeg.angle) * (2 * scale) + Math.sin(gillNorm * side) * (gillSeg.width * 0.2),
-      };
-      const gBot = {
-        x: gillSeg.pos.x + Math.cos(gillNorm * side) * (gillSeg.width * 0.7),
-        y: gillSeg.pos.y + Math.sin(gillNorm * side) * (gillSeg.width * 0.7),
-      };
+    const gTop = {
+      x: gillSeg.pos.x + Math.cos(gillNorm) * (gillSeg.width * 0.75),
+      y: gillSeg.pos.y + Math.sin(gillNorm) * (gillSeg.width * 0.75),
+    };
+    const gMid = {
+      x: gillSeg.pos.x - Math.cos(gillSeg.angle) * (2.2 * scale),
+      y: gillSeg.pos.y - Math.sin(gillSeg.angle) * (2.2 * scale),
+    };
+    const gBot = {
+      x: gillSeg.pos.x - Math.cos(gillNorm) * (gillSeg.width * 0.65),
+      y: gillSeg.pos.y - Math.sin(gillNorm) * (gillSeg.width * 0.65),
+    };
 
-      ctx.beginPath();
-      ctx.moveTo(gTop.x, gTop.y);
-      ctx.quadraticCurveTo(gMid.x, gMid.y, gBot.x, gBot.y);
-      ctx.strokeStyle = 'rgba(148, 163, 184, 0.4)';
-      ctx.lineWidth = 0.9 * scale;
-      ctx.stroke();
-    }
+    ctx.beginPath();
+    ctx.moveTo(gTop.x, gTop.y);
+    ctx.quadraticCurveTo(gMid.x, gMid.y, gBot.x, gBot.y);
+    ctx.strokeStyle = 'rgba(216, 180, 254, 0.45)';
+    ctx.lineWidth = 1.0 * scale;
+    ctx.stroke();
 
     ctx.restore();
   }

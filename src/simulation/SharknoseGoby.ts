@@ -94,6 +94,12 @@ export class SharknoseGoby {
     this.isRunning = running;
   }
 
+  public inviteDanceTimer: number = 0;
+
+  public triggerInviteDance(durationSec: number = 2.0) {
+    this.inviteDanceTimer = durationSec * 60;
+  }
+
   public stunTimer: number = 0;
   private spitDir: { x: number; y: number } = { x: 0, y: 0 };
 
@@ -171,6 +177,22 @@ export class SharknoseGoby {
       this.headPos.y += this.spitDir.y * kick * safeDt;
       this.swimPhase += 0.35 * safeDt;
       this.finPhase += 0.5 * safeDt;
+      this.applyBoundaryRepulsion(width, height, safeDt);
+      this.updateSpine(safeDt);
+      return;
+    }
+
+    if (this.inviteDanceTimer > 0) {
+      this.inviteDanceTimer -= safeDt;
+      this.behaviorMode = 'dance';
+      this.targetSpeed = 0.5;
+      // Signature Goby invitation dance: rapid head bobbing, tail shimmer, and pectoral flutter
+      const danceWiggle = Math.sin(this.swimPhase * 3.5) * 0.16;
+      this.heading = normalizeAngle(this.heading + danceWiggle * safeDt);
+      this.headPos.y += Math.sin(this.swimPhase * 2.8) * 1.8 * safeDt;
+      this.finPhase += 0.85 * safeDt;
+      this.swimPhase += 0.7 * safeDt;
+      this.speed = lerp(this.speed, this.targetSpeed, 0.1 * safeDt);
       this.applyBoundaryRepulsion(width, height, safeDt);
       this.updateSpine(safeDt);
       return;

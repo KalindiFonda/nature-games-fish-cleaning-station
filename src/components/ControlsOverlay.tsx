@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
-import { Compass, HelpCircle, MousePointer, Timer, Trophy, X } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { BookOpen, HelpCircle, MousePointer, X } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 import { ControlledFish, ClientFishInfo } from '../types';
-import { ChallengeInfo } from '../simulation/ClientDirector';
+import { CLIENT_SPECIES_FIELD_NOTES } from '../data/clientFieldNotes';
 
 interface ControlsOverlayProps {
   isRunning?: boolean;
@@ -17,31 +18,25 @@ interface ControlsOverlayProps {
     teethRemaining: number;
     bodyRemaining: number;
   };
-  mode?: 'reef' | 'challenge';
-  onToggleMode?: () => void;
-  challengeInfo?: ChallengeInfo | null;
+  onFieldNoteVisibilityChange?: (isVisible: boolean) => void;
 }
-
-const fmtTime = (sec: number) => {
-  const s = Math.max(0, Math.ceil(sec));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-};
 
 export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
   selectedFish,
   onSelectFish,
-  onNextFish,
   clientFishInfo,
   parasiteStats,
-  mode = 'reef',
-  onToggleMode,
-  challengeInfo,
+  onFieldNoteVisibilityChange,
 }) => {
-  const inChallenge = mode === 'challenge';
   const [helpOpen, setHelpOpen] = useState(false);
-  const activeCleanerName = selectedFish === 'wrasse' ? 'Cleaner Wrasse' : 'Sharknose Goby';
+  const [infoTab, setInfoTab] = useState<'instructions' | 'about' | 'resources'>('instructions');
+  const [fieldNoteOpen, setFieldNoteOpen] = useState(false);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const activeCleanerName =
+    selectedFish === 'wrasse' ? 'Spanish Hogfish (Juvenile)' : 'Sharknose Goby';
   const activeCleanerScientific =
-    selectedFish === 'wrasse' ? 'Labroides dimidiatus' : 'Elacatinus evelynae';
+    selectedFish === 'wrasse' ? 'Bodianus rufus' : 'Elacatinus evelynae';
 
   const species = clientFishInfo?.species || 'grouper';
   const clientName = clientFishInfo?.name || '';
@@ -53,6 +48,54 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
     clientFishInfo.state !== 'waiting'
   );
   const patienceFrac = Math.max(0, Math.min(1, clientFishInfo?.patienceFrac ?? 1));
+
+  const activeNote = species in CLIENT_SPECIES_FIELD_NOTES ? CLIENT_SPECIES_FIELD_NOTES[species] : null;
+
+  // Handle open / close lifecycle for the 15-second field note
+  const handleOpenFieldNote = () => {
+    setFieldNoteOpen(true);
+  };
+
+  const handleCloseFieldNote = () => {
+    setFieldNoteOpen(false);
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  };
+
+  const handleToggleFieldNote = () => {
+    if (fieldNoteOpen) {
+      handleCloseFieldNote();
+    } else {
+      handleOpenFieldNote();
+    }
+  };
+
+  // Synchronize pause state with parent
+  useEffect(() => {
+    onFieldNoteVisibilityChange?.(fieldNoteOpen);
+  }, [fieldNoteOpen, onFieldNoteVisibilityChange]);
+
+  // 15-second auto-close timer when field note is visible
+  useEffect(() => {
+    if (fieldNoteOpen) {
+      const timer = setTimeout(() => {
+        handleCloseFieldNote();
+      }, 15000);
+      timerRef.current = timer;
+      return () => {
+        clearTimeout(timer);
+      };
+    }
+  }, [fieldNoteOpen]);
+
+  // If the client fish departs, close the field note
+  useEffect(() => {
+    if (!isClientPresent && fieldNoteOpen) {
+      handleCloseFieldNote();
+    }
+  }, [isClientPresent, fieldNoteOpen]);
 
   // Dynamic species color accent for the single client card
   const accent = (() => {
@@ -96,140 +139,229 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
           </div>
         </div>
 
-        {/* Challenge HUD: countdown + nutrition score */}
-        {inChallenge && challengeInfo && (
-          <div className="pointer-events-none flex items-stretch gap-4 backdrop-blur-md bg-amber-950/70 border-2 border-amber-400/60 px-5 py-2 rounded-2xl text-amber-100 font-mono shadow-[0_8px_32px_rgba(0,0,0,0.4)]">
-            <div className="flex flex-col items-center justify-center">
-              <div className="flex items-center gap-1 text-[9px] uppercase tracking-[0.25em] text-amber-300/80">
-                <Timer className="w-3 h-3" /> Time
+        {/* Right column: The single client card & the sliding Field Note card */}
+        <div className="flex flex-col items-end gap-2.5 max-w-[360px]">
+          {/* The single client card: identity, progress, and patience bar */}
+          {clientFishInfo && (
+            <div
+              className={`relative overflow-hidden backdrop-blur-md px-4 pt-2.5 pb-3 rounded-2xl border transition-all duration-500 shadow-[0_8px_32px_rgba(0,0,0,0.3)] font-mono min-w-[240px] pointer-events-auto ${
+                isClientPresent
+                  ? `opacity-100 scale-100 translate-y-0 ${accent.card}`
+                  : 'opacity-0 scale-95 -translate-y-1 pointer-events-none'
+              }`}
+            >
+              <div className="flex items-baseline justify-between gap-3">
+                {/* Clickable fish name to toggle field note */}
+                <button
+                  type="button"
+                  id="client-fish-name-button"
+                  onClick={handleToggleFieldNote}
+                  className="group flex items-center gap-1.5 text-[12px] font-semibold tracking-wider hover:text-white transition-colors cursor-pointer text-left focus:outline-none"
+                  title="Click to reveal species field note (pauses parasite timer)"
+                  aria-expanded={fieldNoteOpen}
+                >
+                  <span className="underline decoration-cyan-400/50 underline-offset-2 group-hover:decoration-cyan-300">
+                    {clientName}
+                  </span>
+                  <BookOpen className="w-3 h-3 text-cyan-300/70 group-hover:text-cyan-200 group-hover:scale-110 transition-transform" />
+                </button>
+                <span className="text-[9px] opacity-60 uppercase tracking-wider">
+                  {clientFishInfo.size}
+                </span>
               </div>
-              <span
-                className={`text-xl font-bold tracking-widest tabular-nums leading-tight ${
-                  challengeInfo.timeLeft < 30 && !challengeInfo.over
-                    ? 'text-red-300 animate-pulse'
-                    : ''
-                }`}
-              >
-                {fmtTime(challengeInfo.timeLeft)}
-              </span>
-            </div>
-            <div className="w-px bg-amber-400/30" />
-            <div className="flex flex-col items-center justify-center">
-              <div className="flex items-center gap-1 text-[9px] uppercase tracking-[0.25em] text-amber-300/80">
-                <Trophy className="w-3 h-3" /> Nutrition
-              </div>
-              <span className="text-xl font-bold tracking-widest tabular-nums leading-tight">
-                {challengeInfo.score}
-              </span>
-            </div>
-          </div>
-        )}
-
-        {/* The single client card: identity, progress, and patience bar */}
-        {clientFishInfo && (
-          <div
-            className={`relative overflow-hidden backdrop-blur-md px-4 pt-2.5 pb-3 rounded-2xl border transition-all duration-500 shadow-[0_8px_32px_rgba(0,0,0,0.3)] font-mono min-w-[230px] ${
-              isClientPresent
-                ? `opacity-100 scale-100 translate-y-0 ${accent.card}`
-                : 'opacity-0 scale-95 -translate-y-1 pointer-events-none'
-            }`}
-          >
-            <div className="flex items-baseline justify-between gap-3">
-              <span className="text-[12px] font-semibold tracking-wider">
-                {clientName}
-                {inChallenge && clientFishInfo.isVisitor && (
-                  <span className="ml-2 text-[8px] uppercase tracking-widest bg-amber-400 text-black rounded px-1 py-0.5 font-bold align-middle">
-                    visitor ×2
+              <div className="flex items-center justify-between gap-3 mt-0.5">
+                <span className="text-[9px] opacity-60 italic">{clientScientific}</span>
+                {parasiteStats && (
+                  <span className="text-[10px] font-semibold tracking-wider">
+                    {parasiteStats.removed}/{parasiteStats.total} cleaned
                   </span>
                 )}
-              </span>
-              <span className="text-[9px] opacity-60 uppercase tracking-wider">
-                {clientFishInfo.size}
-              </span>
-            </div>
-            <div className="flex items-center justify-between gap-3 mt-0.5">
-              <span className="text-[9px] opacity-60 italic">{clientScientific}</span>
-              {parasiteStats && (
-                <span className="text-[10px] font-semibold tracking-wider">
-                  {parasiteStats.removed}/{parasiteStats.total} cleaned
-                </span>
-              )}
-            </div>
-            {clientFishInfo.state === 'exiting' && (
-              <div className="text-[9px] uppercase tracking-wider opacity-70 mt-1">
-                Swimming off…
               </div>
-            )}
-            {/* Patience: a soft hairline along the card's bottom edge */}
-            <div className="absolute inset-x-0 bottom-0 h-[3px] bg-black/30">
-              {clientFishInfo.state !== 'exiting' && (
-                <div
-                  className={`h-full transition-[width] duration-500 ${
-                    patienceLow ? 'bg-amber-400/80' : accent.bar
-                  } opacity-60`}
-                  style={{ width: `${patienceFrac * 100}%` }}
-                />
+              {clientFishInfo.state === 'exiting' && (
+                <div className="text-[9px] uppercase tracking-wider opacity-70 mt-1">
+                  Swimming off…
+                </div>
               )}
+              {/* Patience / timer bar */}
+              <div className="absolute inset-x-0 bottom-0 h-[3px] bg-black/30">
+                {clientFishInfo.state !== 'exiting' && (
+                  <div
+                    className={`h-full transition-[width] duration-500 ${
+                      fieldNoteOpen
+                        ? 'bg-amber-400 animate-pulse'
+                        : patienceLow
+                        ? 'bg-amber-400/80'
+                        : accent.bar
+                    } opacity-80`}
+                    style={{ width: `${patienceFrac * 100}%` }}
+                  />
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          )}
+
+          {/* Field Note Card: slowly slides down on name click, auto slides back after 15s or on close */}
+          <AnimatePresence>
+            {fieldNoteOpen && activeNote && isClientPresent && (
+              <motion.div
+                id="client-field-note-card"
+                initial={{ opacity: 0, y: -28, scale: 0.94 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -24, scale: 0.94 }}
+                transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
+                className="pointer-events-auto w-full backdrop-blur-xl bg-[#001830]/95 border border-cyan-400/40 rounded-2xl p-4 text-white shadow-[0_16px_40px_rgba(0,0,0,0.6)] font-mono z-30 select-text"
+              >
+                {/* Header with Title and Close Button */}
+                <div className="flex items-center justify-between gap-2 pb-2 border-b border-cyan-400/20">
+                  <span className="text-[10px] uppercase tracking-[0.25em] text-cyan-300 font-semibold flex items-center gap-1.5">
+                    <BookOpen className="w-3.5 h-3.5 text-cyan-400" />
+                    Field Note
+                  </span>
+                  <button
+                    type="button"
+                    id="close-client-field-note-btn"
+                    onClick={handleCloseFieldNote}
+                    className="w-6 h-6 rounded-lg bg-white/5 hover:bg-white/15 border border-white/10 text-cyan-200/70 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+                    aria-label="Close field note"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                {/* Species Title */}
+                <div className="mt-2.5">
+                  <h3 className="text-sm font-semibold text-white tracking-wide">{activeNote.title}</h3>
+                  <p className="text-[10px] italic opacity-60 text-cyan-200 font-mono">{clientScientific}</p>
+                </div>
+
+                {/* Body Text */}
+                <p className="text-[11.5px] leading-relaxed opacity-90 text-slate-100 mt-2 font-sans">
+                  {activeNote.note}
+                </p>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
       </header>
 
-      {/* How to play */}
+      {/* Info / Instructions Modal */}
       {helpOpen && (
-        <div className="pointer-events-auto absolute bottom-28 left-1/2 -translate-x-1/2 w-[420px] max-w-[92vw] backdrop-blur-md bg-cyan-950/90 border border-cyan-400/30 rounded-2xl px-5 py-4 text-white font-mono shadow-[0_16px_48px_rgba(0,0,0,0.6)] z-30">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[9px] uppercase tracking-[0.3em] text-cyan-300/80">
-              How to play
-            </span>
+        <div
+          id="instructions-modal"
+          className="pointer-events-auto absolute bottom-24 sm:bottom-28 left-1/2 -translate-x-1/2 w-[490px] max-w-[92vw] h-[290px] max-h-[75vh] flex flex-col backdrop-blur-xl bg-[#001830]/95 border border-cyan-400/40 rounded-2xl p-5 text-white shadow-[0_16px_48px_rgba(0,0,0,0.6)] z-30"
+        >
+          {/* Header with 3 Tabs and Close button */}
+          <div className="flex items-center justify-between gap-2 mb-3 pb-2.5 border-b border-cyan-400/20 shrink-0">
+            {/* Tab navigation */}
+            <div className="flex items-center gap-1 bg-black/40 p-1 rounded-xl border border-white/10">
+              <button
+                type="button"
+                id="tab-instructions-btn"
+                onClick={() => setInfoTab('instructions')}
+                className={`px-3 py-1 text-[11px] font-sans font-medium rounded-lg transition-all cursor-pointer ${
+                  infoTab === 'instructions'
+                    ? 'bg-cyan-400 text-black font-semibold shadow-[0_0_10px_rgba(34,211,238,0.5)]'
+                    : 'text-cyan-100/70 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                Instructions
+              </button>
+              <button
+                type="button"
+                id="tab-about-btn"
+                onClick={() => setInfoTab('about')}
+                className={`px-3 py-1 text-[11px] font-sans font-medium rounded-lg transition-all cursor-pointer ${
+                  infoTab === 'about'
+                    ? 'bg-cyan-400 text-black font-semibold shadow-[0_0_10px_rgba(34,211,238,0.5)]'
+                    : 'text-cyan-100/70 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                About
+              </button>
+              <button
+                type="button"
+                id="tab-resources-btn"
+                onClick={() => setInfoTab('resources')}
+                className={`px-3 py-1 text-[11px] font-sans font-medium rounded-lg transition-all cursor-pointer ${
+                  infoTab === 'resources'
+                    ? 'bg-cyan-400 text-black font-semibold shadow-[0_0_10px_rgba(34,211,238,0.5)]'
+                    : 'text-cyan-100/70 hover:text-white hover:bg-white/10'
+                }`}
+              >
+                Resources
+              </button>
+            </div>
+
             <button
               type="button"
+              id="close-instructions-btn"
               onClick={() => setHelpOpen(false)}
-              className="text-cyan-200/50 hover:text-white cursor-pointer"
-              aria-label="Close help"
+              className="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/15 border border-white/10 text-cyan-200/70 hover:text-white flex items-center justify-center transition-colors cursor-pointer shrink-0"
+              aria-label="Close"
             >
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
-          <div className="text-[10px] uppercase tracking-widest text-cyan-300 mb-1">Reef mode</div>
-          <ul className="text-[11px] leading-relaxed opacity-85 space-y-1 mb-3">
-            <li>• Click and drag around the water to move your fish — click a cleaner to switch.</li>
-            <li>• Brush parasites to eat them. Get close to a gill flap and it lifts open.</li>
-            <li>• Hover beside a waiting fish to call it over to the station.</li>
-            <li>• Fully cleaned clients leave sparkling — and unlock field notes.</li>
-          </ul>
-          <div className="text-[10px] uppercase tracking-widest text-amber-300 mb-1">
-            3:00 Challenge
+
+          {/* Tab Content Area: fixed size across tabs, scrolls vertically when needed */}
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1.5 custom-scrollbar">
+            {/* Tab 1: Instructions */}
+            {infoTab === 'instructions' && (
+              <ul className="text-[11.5px] leading-relaxed opacity-90 space-y-2.5 font-sans text-slate-100">
+                <li className="flex items-start gap-2">
+                  <span className="text-cyan-400 font-bold shrink-0 mt-0.5">•</span>
+                  <span>Move your mouse around the water to guide your cleaner fish - click either cleaner to switch</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-cyan-400 font-bold shrink-0 mt-0.5">•</span>
+                  <span>Brush parasites to eat them. Get close to a gill flap to check behind.</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-cyan-400 font-bold shrink-0 mt-0.5">•</span>
+                  <span>Click on a waiting client fish to attract them to the cleaning station</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-cyan-400 font-bold shrink-0 mt-0.5">•</span>
+                  <span>Click the client fish name in the top right to read more about it</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="text-cyan-400 font-bold shrink-0 mt-0.5">•</span>
+                  <span>Fully clean a fish of parasites and watch them sparkle - rewarding you with a new field note in the bottom left</span>
+                </li>
+              </ul>
+            )}
+
+            {/* Tab 2: About */}
+            {infoTab === 'about' && (
+              <div className="py-2 font-sans text-slate-100">
+                <p className="text-[12px] sm:text-[12.5px] leading-relaxed font-normal text-slate-200">
+                  A collaboration between Nature Venture and Internet of Elephants. Developed by Gautam Shah and Kalindi Fonda.
+                </p>
+              </div>
+            )}
+
+            {/* Tab 3: Resources (Blank for now) */}
+            {infoTab === 'resources' && (
+              <div className="py-2 font-sans" />
+            )}
           </div>
-          <ul className="text-[11px] leading-relaxed opacity-85 space-y-1">
-            <li>• Score nutrition: body parasites 10 · teeth &amp; gills 20 · mucus bites 50.</li>
-            <li>
-              • Hold <b>SPACE</b> on a client's flank to bite mucus — they jolt and lose patience.
-            </li>
-            <li>• Hold <b>M</b> to massage patience back up.</li>
-            <li>• Big-mouthed clients open in timed windows — dart in, leave on the shake.</li>
-            <li>• Suitcase fish are visitors: impatient, but worth double.</li>
-            <li>• Your colleague preps the waiting queue in the background.</li>
-          </ul>
         </div>
       )}
 
       {/* Bottom Floating Area */}
       <footer className="relative flex flex-col items-center gap-3 w-full">
-        <div className="text-[11px] tracking-wider text-cyan-200/80 font-mono flex items-center gap-2 drop-shadow bg-black/30 px-3.5 py-1.5 rounded-full border border-white/10 text-center">
-          <Compass className="w-3.5 h-3.5 text-cyan-400 animate-spin-slow shrink-0" />
-          <span className="uppercase text-[10px] tracking-widest">
-            {inChallenge
-              ? 'SPACE on the flank: bite mucus • M: massage • gape windows: clean teeth'
-              : `Click and drag around the water to move your fish • Click a cleaner to switch`}
-          </span>
-        </div>
-
         <div className="pointer-events-auto backdrop-blur-2xl bg-black/45 border border-white/15 px-3 sm:px-4 py-2 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] text-white flex items-center justify-center gap-3">
           <button
             type="button"
-            onClick={() => setHelpOpen((o) => !o)}
-            aria-label="How to play"
+            id="open-instructions-btn"
+            onClick={() => {
+              setHelpOpen((o) => {
+                if (!o) setInfoTab('instructions');
+                return !o;
+              });
+            }}
+            aria-label="Instructions, About & Resources"
+            title="Instructions, About & Resources"
             className="flex items-center justify-center w-8 h-8 rounded-xl bg-white/5 border border-white/10 text-cyan-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
           >
             <HelpCircle className="w-4 h-4" />
@@ -248,7 +380,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
               <MousePointer
                 className={`w-3 h-3 ${selectedFish === 'wrasse' ? 'text-black' : 'text-cyan-400'}`}
               />
-              <span>Cleaner Wrasse</span>
+              <span>Spanish Hogfish</span>
             </button>
 
             <button
@@ -268,27 +400,8 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
             </button>
           </div>
         </div>
-
-        <div className="absolute right-0 bottom-0 pointer-events-auto">
-          <button
-            id="challenge-button"
-            type="button"
-            onClick={onToggleMode}
-            title={inChallenge ? 'End the challenge, back to the reef' : 'Start a 3-minute nutrition challenge'}
-            className={`group flex items-center gap-2 px-3 py-2 rounded-2xl border shadow-[0_8px_24px_rgba(0,0,0,0.4)] backdrop-blur-md transition-all duration-200 cursor-pointer font-mono text-xs ${
-              inChallenge
-                ? 'bg-amber-900/80 hover:bg-amber-800/90 border-amber-300/60 text-amber-100'
-                : 'bg-amber-950/70 hover:bg-amber-900/90 border-amber-400/40 hover:border-amber-300 text-amber-200 hover:text-white'
-            }`}
-          >
-            <Timer className="w-3.5 h-3.5 text-amber-400" />
-            <span className="text-[10px] uppercase tracking-wider font-semibold">
-              {inChallenge ? 'End Challenge' : '3:00 Challenge'}
-            </span>
-          </button>
-        </div>
-
       </footer>
     </div>
   );
 };
+

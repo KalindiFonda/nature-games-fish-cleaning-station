@@ -24,8 +24,8 @@ export class Trumpetfish {
   public targetPos: Vector2D = { x: 0, y: 0 };
   public heading: number = Math.PI; // Facing left toward cleaning station
 
-  // Scale 6.5
-  public scale: number = 3.9;
+  // Scaled up by 20% (from 3.9 to 4.68)
+  public scale: number = 4.68;
 
   public state: 'entering' | 'stationary' | 'exiting' | 'exited' = 'entering';
   public entrySpeed: number = 2.5;
@@ -62,7 +62,7 @@ export class Trumpetfish {
     };
 
     this.initParasites();
-    this.parasites = subsampleParasites(this.parasites, 12);
+    this.parasites = subsampleParasites(this.parasites, 18);
   }
 
   /**
@@ -74,10 +74,16 @@ export class Trumpetfish {
 
     // 1. Parasites on tiny terminal mouth and long tubular snout
     const snoutCoords = [
+      { x: -95.0, y: -0.5, part: 'upperTeeth' as const },
       { x: -94.0, y: -0.8, part: 'upperTeeth' as const },
+      { x: -91.0, y: -0.3, part: 'upperTeeth' as const },
+      { x: -87.0, y: -0.6, part: 'upperTeeth' as const },
+      { x: -84.0, y: -0.5, part: 'upperTeeth' as const },
+      { x: -93.5, y: 1.8, part: 'lowerTeeth' as const },
       { x: -92.0, y: 1.4, part: 'lowerTeeth' as const },
       { x: -90.0, y: 3.0, part: 'lowerTeeth' as const }, // near chin barbel
-      { x: -84.0, y: -0.5, part: 'upperTeeth' as const },
+      { x: -88.0, y: 2.2, part: 'lowerTeeth' as const },
+      { x: -85.0, y: 1.5, part: 'lowerTeeth' as const },
       { x: -76.0, y: 0.8, part: 'body' as const },
       { x: -68.0, y: -1.2, part: 'body' as const },
       { x: -60.0, y: 1.0, part: 'body' as const },
@@ -101,8 +107,11 @@ export class Trumpetfish {
       // Cranium & Opercular area
       { x: -40.0, y: -3.5, part: 'body' as const },
       { x: -32.0, y: -5.0, part: 'body' as const },
+      { x: -26.0, y: 2.0, part: 'operculum' as const },
       { x: -24.0, y: 4.0, part: 'operculum' as const },
+      { x: -20.0, y: -1.0, part: 'operculum' as const },
       { x: -18.0, y: 1.0, part: 'operculum' as const },
+      { x: -15.0, y: 3.0, part: 'operculum' as const },
       // Elongated Torso (Dorsal & Lateral)
       { x: -10.0, y: -6.0, part: 'body' as const },
       { x: -2.0, y: -6.5, part: 'body' as const },

@@ -28,10 +28,12 @@ export class SpottedMoray {
   public targetPos: Vector2D = { x: 0, y: 0 };
   public heading: number = -0.32; // Diagonally up-right from reef crevice
 
-  // Scale 9.4 (2.0x relative to Queen Triggerfish baseline 4.7)
-  public scale: number = 5.6;
+  // Scaled up by 20% (from 5.6 to 6.72)
+  public scale: number = 6.72;
 
   public state: 'entering' | 'stationary' | 'exiting' | 'exited' = 'entering';
+  public mode: 'queue' | 'active' = 'queue';
+  public targetExtension: number = 0.28;
   public entrySpeed: number = 2.0;
   public exitSpeed: number = 2.4;
 
@@ -63,25 +65,36 @@ export class SpottedMoray {
     this.pos = { ...this.creviceOrigin };
     this.extension = 0.0;
     this.initParasites();
-    this.parasites = subsampleParasites(this.parasites, 16);
+    this.parasites = subsampleParasites(this.parasites, 24);
   }
 
   public calculatePositions(width: number, height: number) {
     const startY = height * 0.68;
     const slopeAngleRad = (30 * Math.PI) / 180;
     const cot30 = 1 / Math.tan(slopeAngleRad);
-    const bottomX = (height - startY) * cot30;
 
-    // Origin behind the mid-upper reef slope
+    // Crevice opening point on the reef slope
+    const creviceY = startY + (height - startY) * 0.36 + 20;
+    const reefEdgeX = (creviceY - startY) * cot30;
+    const creviceExitX = reefEdgeX - 15;
+
+    const cosH = Math.cos(this.heading);
+    const sinH = Math.sin(this.heading);
+    const snoutLocalDist = 48 * this.scale;
+
+    // When extension = 0.0 (fully retracted into crevice tunnel):
+    // The entire head & snout tip are retracted at least 80px deep inside the solid reef rock
+    const retractDistance = snoutLocalDist + 80;
     this.creviceOrigin = {
-      x: bottomX * 0.32 - 40,
-      y: startY + (height - startY) * 0.36 + 20,
+      x: creviceExitX - retractDistance * cosH,
+      y: creviceY - retractDistance * sinH,
     };
 
-    // Target extended position (emerging diagonally up-right into water column)
+    // Extended active station target (extension = 1.0): emerging diagonally up-right into water column
+    const emergeDistance = 145 * (this.scale / 4.7);
     this.targetPos = {
-      x: this.creviceOrigin.x + 140 * (this.scale / 4.7),
-      y: this.creviceOrigin.y - 75 * (this.scale / 4.7),
+      x: creviceExitX + emergeDistance * cosH,
+      y: creviceY + emergeDistance * sinH,
     };
   }
 
@@ -94,13 +107,22 @@ export class SpottedMoray {
 
     // 1. Parasites on huge gaping mouth and needle teeth
     const mouthCoords = [
+      { x: 40.0, y: -4.5, part: 'upperTeeth' as const },
       { x: 38.0, y: -4.0, part: 'upperTeeth' as const },
+      { x: 34.0, y: -3.8, part: 'upperTeeth' as const },
       { x: 30.0, y: -3.5, part: 'upperTeeth' as const },
+      { x: 26.0, y: -3.2, part: 'upperTeeth' as const },
       { x: 22.0, y: -3.0, part: 'upperTeeth' as const },
+      { x: 18.0, y: -2.8, part: 'upperTeeth' as const },
+      { x: 38.0, y: 8.5, part: 'lowerTeeth' as const },
       { x: 36.0, y: 8.0, part: 'lowerTeeth' as const },
+      { x: 32.0, y: 7.8, part: 'lowerTeeth' as const },
       { x: 28.0, y: 7.5, part: 'lowerTeeth' as const },
+      { x: 24.0, y: 7.2, part: 'lowerTeeth' as const },
       { x: 20.0, y: 7.0, part: 'lowerTeeth' as const },
+      { x: 16.0, y: 6.8, part: 'lowerTeeth' as const },
       { x: 42.0, y: -8.0, part: 'upperTeeth' as const }, // near tubular nostril
+      { x: 44.0, y: -6.0, part: 'upperTeeth' as const },
     ];
 
     for (const c of mouthCoords) {
@@ -122,9 +144,12 @@ export class SpottedMoray {
       { x: 22.0, y: -14.0, part: 'body' as const },
       { x: 10.0, y: -16.5, part: 'body' as const },
       { x: 0.0, y: -17.0, part: 'body' as const },
-      // Cheeks & Throat
+      // Cheeks, Gill Aperture & Throat
+      { x: 16.0, y: 2.0, part: 'operculum' as const },
       { x: 12.0, y: 4.0, part: 'operculum' as const },
+      { x: 6.0, y: 6.0, part: 'operculum' as const },
       { x: 2.0, y: 8.0, part: 'operculum' as const },
+      { x: -3.0, y: 9.5, part: 'operculum' as const },
       { x: -8.0, y: 11.0, part: 'belly' as const },
       { x: -18.0, y: 12.5, part: 'belly' as const },
       // Visible Muscular Neck (Anterior 15-20%)
@@ -148,31 +173,36 @@ export class SpottedMoray {
     }
   }
 
-  public getParasiteLocalPos(p: Parasite): Vector2D {
+  public getParasiteLocalUnrotated(p: Parasite): { x: number; y: number } {
     const s = this.scale;
-    const cosH = Math.cos(this.heading);
-    const sinH = Math.sin(this.heading);
-
     let lx = p.localX * s;
     let ly = p.localY * s;
 
     if (p.attachPart === 'lowerTeeth') {
-      ly = p.localY * s + (this.mouthAperture - 1.0) * (5.5 * s);
+      ly += (this.mouthAperture - 1.0) * (5.5 * s);
     } else if (p.attachPart === 'upperTeeth') {
-      ly = p.localY * s - (this.mouthAperture - 1.0) * (2.0 * s);
+      ly -= (this.mouthAperture - 1.0) * (2.0 * s);
     } else if (p.attachPart === 'belly') {
-      ly = p.localY * s + Math.sin(this.breathPhase) * 1.5;
+      ly += Math.sin(this.breathPhase) * 1.5;
     } else if (p.attachPart === 'operculum') {
-      lx = p.localX * s - Math.sin(this.breathPhase) * 1.8;
+      lx -= Math.sin(this.breathPhase) * 1.8;
     }
 
     // Serpent undulation offset
     const snakeSway = Math.sin(this.animTime * 1.5 + p.localX / 30) * 2.0;
     ly += snakeSway;
 
+    return { x: lx, y: ly };
+  }
+
+  public getParasiteLocalPos(p: Parasite): Vector2D {
+    const cosH = Math.cos(this.heading);
+    const sinH = Math.sin(this.heading);
+    const loc = this.getParasiteLocalUnrotated(p);
+
     return {
-      x: lx * cosH - ly * sinH,
-      y: lx * sinH + ly * cosH,
+      x: loc.x * cosH - loc.y * sinH,
+      y: loc.x * sinH + loc.y * cosH,
     };
   }
 
@@ -182,6 +212,25 @@ export class SpottedMoray {
 
   public setFacingPlayer(_facing: boolean) {
     this.facingPlayer = false;
+  }
+
+  public setMode(mode: 'queue' | 'active') {
+    this.mode = mode;
+    if (mode === 'queue') {
+      this.targetExtension = 0.36;
+      if (this.state !== 'exited' && this.state !== 'exiting') {
+        if (this.extension < this.targetExtension) {
+          this.state = 'entering';
+        } else {
+          this.state = 'stationary';
+        }
+      }
+    } else {
+      this.targetExtension = 1.0;
+      if (this.state !== 'exited' && this.state !== 'exiting') {
+        this.state = 'entering';
+      }
+    }
   }
 
   public startExit() {
@@ -207,16 +256,17 @@ export class SpottedMoray {
 
     // State machine: Emerge from behind reef / Retreat back behind reef
     if (this.state === 'entering') {
-      this.extension += 0.014 * this.entrySpeed * safeDt;
-      if (this.extension >= 1.0) {
-        this.extension = 1.0;
+      this.extension += 0.012 * this.entrySpeed * safeDt;
+      if (this.extension >= this.targetExtension) {
+        this.extension = this.targetExtension;
         this.state = 'stationary';
       }
     } else if (this.state === 'stationary') {
       // Natural subtle undulation in place
-      this.extension = 1.0 + Math.sin(this.animTime * 1.2) * 0.025;
+      const waveAmp = this.mode === 'queue' ? 0.008 : 0.018;
+      this.extension = this.targetExtension + Math.sin(this.animTime * 1.2) * waveAmp;
     } else if (this.state === 'exiting') {
-      this.extension -= 0.018 * this.exitSpeed * safeDt;
+      this.extension -= 0.012 * this.exitSpeed * safeDt;
       if (this.extension <= 0.0) {
         this.extension = 0.0;
         this.state = 'exited';
@@ -232,16 +282,18 @@ export class SpottedMoray {
   public updateParasites(
     wrasseMouth: Vector2D | null,
     gobiMouth: Vector2D | null,
-    dt: number,
-    wrasseScale: number,
-    gobiScale: number
+    _dt: number,
+    wrasseScale: number = 0.9,
+    gobiScale: number = 0.65
   ) {
-    if (this.extension < 0.3) return;
+    if (this.extension < 0.2) return;
+
+    // Generous mouth touch radius matching the large scale of the moray eel
+    const wrasseEatDist = 32 * Math.max(0.75, wrasseScale);
+    const gobiEatDist = 28 * Math.max(0.75, gobiScale);
 
     for (const p of this.parasites) {
       if (p.removed) continue;
-      if (p.attachPart === 'operculum' && this.gillOpen < 0.6) continue;
-      if ((p.attachPart === 'upperTeeth' || p.attachPart === 'lowerTeeth') && this.mouthGate < 0.6) continue;
 
       const lp = this.getParasiteLocalPos(p);
       const wx = this.pos.x + lp.x;
@@ -252,15 +304,13 @@ export class SpottedMoray {
       // Check Wrasse
       if (wrasseMouth) {
         const dWrasse = Math.hypot(wx - wrasseMouth.x, wy - wrasseMouth.y);
-        const threshold = (p.type === 'teeth' ? 26 : 22) * wrasseScale;
-        if (dWrasse < threshold) isHovered = true;
+        if (dWrasse < wrasseEatDist) isHovered = true;
       }
 
       // Check Goby
       if (gobiMouth && !isHovered) {
         const dGobi = Math.hypot(wx - gobiMouth.x, wy - gobiMouth.y);
-        const threshold = (p.type === 'teeth' ? 24 : 20) * gobiScale;
-        if (dGobi < threshold) isHovered = true;
+        if (dGobi < gobiEatDist) isHovered = true;
       }
 
       // Eat on touch, same as every other client species
@@ -345,6 +395,12 @@ export class SpottedMoray {
 
   public hitTest(pt: Vector2D): boolean {
     const s = this.scale;
+    const cosH = Math.cos(this.heading);
+    const sinH = Math.sin(this.heading);
+    const hx = this.pos.x + 28 * s * cosH;
+    const hy = this.pos.y + 28 * s * sinH;
+    if (Math.hypot(pt.x - hx, pt.y - hy) < 95) return true;
+
     const minX = this.pos.x - 70 * s;
     const maxX = this.pos.x + 55 * s;
     const minY = this.pos.y - 45 * s;
@@ -926,11 +982,12 @@ export class SpottedMoray {
     const s = this.scale;
 
     for (const p of this.parasites) {
+      const loc = this.getParasiteLocalUnrotated(p);
+
       if (p.removed) {
         if (p.hoverTimer > 0) {
           ctx.save();
-          const lp = { x: p.localX * s, y: p.localY * s };
-          ctx.translate(lp.x, lp.y);
+          ctx.translate(loc.x, loc.y);
           drawEatRing(ctx, parasiteUnit(s), p.hoverTimer);
           ctx.restore();
           p.hoverTimer -= 0.02;
@@ -939,16 +996,7 @@ export class SpottedMoray {
       }
 
       ctx.save();
-      let ly = p.localY * s;
-      if (p.attachPart === 'lowerTeeth') {
-        ly = p.localY * s + (this.mouthAperture - 1.0) * (5.5 * s);
-      } else if (p.attachPart === 'upperTeeth') {
-        ly = p.localY * s - (this.mouthAperture - 1.0) * (2.0 * s);
-      }
-      // Serpent wave
-      ly += Math.sin(this.animTime * 1.5 + p.localX / 30) * 2.0;
-
-      ctx.translate(p.localX * s, ly);
+      ctx.translate(loc.x, loc.y);
 
       // Cleaned progress glow ring
       if (p.hoverTimer > 0) {

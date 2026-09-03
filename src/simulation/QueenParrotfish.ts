@@ -24,8 +24,8 @@ export class QueenParrotfish {
   public targetPos: Vector2D = { x: 0, y: 0 };
   public heading: number = Math.PI; // Facing left toward the cleaning station in profile
 
-  // Scale 5.64 (1.2x relative to Queen Triggerfish baseline 4.7)
-  public scale: number = 3.4;
+  // Scaled up by 20% (from 3.4 to 4.08)
+  public scale: number = 4.08;
 
   public state: 'entering' | 'stationary' | 'exiting' | 'exited' = 'entering';
   public entrySpeed: number = 2.6;
@@ -63,7 +63,7 @@ export class QueenParrotfish {
     };
 
     this.initParasites();
-    this.parasites = subsampleParasites(this.parasites, 14);
+    this.parasites = subsampleParasites(this.parasites, 21);
   }
 
   /**

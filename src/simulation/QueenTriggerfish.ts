@@ -25,8 +25,8 @@ export class QueenTriggerfish {
   public targetPos: Vector2D = { x: 0, y: 0 };
   public heading: number = Math.PI; // Facing left toward cleaning station
 
-  // Baseline scale x = 4.7
-  public scale: number = 2.8;
+  // Scaled up by 20% (from 2.8 to 3.36)
+  public scale: number = 3.36;
 
   public state: 'entering' | 'stationary' | 'exiting' | 'exited' = 'entering';
   public entrySpeed: number = 2.7;
@@ -64,7 +64,7 @@ export class QueenTriggerfish {
     };
 
     this.initParasites();
-    this.parasites = subsampleParasites(this.parasites, 12);
+    this.parasites = subsampleParasites(this.parasites, 18);
   }
 
   /**
@@ -83,6 +83,9 @@ export class QueenTriggerfish {
       { x: -33.0, y: 6.5, part: 'lowerTeeth' as const },
       { x: -37.0, y: 6.0, part: 'lowerTeeth' as const },
       { x: -31.0, y: 4.0, part: 'upperTeeth' as const },
+      { x: -39.0, y: 3.8, part: 'upperTeeth' as const },
+      { x: -35.5, y: 7.0, part: 'lowerTeeth' as const },
+      { x: -32.5, y: 5.0, part: 'lowerTeeth' as const },
     ];
 
     for (const c of mouthCoords) {
@@ -130,8 +133,11 @@ export class QueenTriggerfish {
       { x: 28.0, y: 8.0, part: 'belly' as const },
       { x: 38.0, y: 4.0, part: 'body' as const },
       // Opercular zone
+      { x: -14.0, y: 2.0, part: 'operculum' as const },
       { x: -10.0, y: 4.0, part: 'operculum' as const },
+      { x: -7.0, y: 1.0, part: 'operculum' as const },
       { x: -4.0, y: 6.0, part: 'operculum' as const },
+      { x: -2.0, y: 3.5, part: 'operculum' as const },
     ];
 
     for (const c of bodyCoords) {
