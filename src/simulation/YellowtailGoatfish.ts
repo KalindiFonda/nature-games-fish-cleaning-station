@@ -1,12 +1,7 @@
 import { Vector2D, Parasite } from '../types';
-import { lerp, clamp } from '../utils/math';
-import { parasiteUnit, drawParasite, drawEatRing, subsampleParasites } from './parasiteFx';
-
-export interface CleaningTargetSpot {
-  id: string;
-  name: string;
-  pos: Vector2D;
-}
+import { clamp } from '../utils/math';
+import { subsampleParasites } from './parasiteFx';
+import { ClientFishBase, CleaningTargetSpot } from './ClientFishBase';
 
 /**
  * Yellowtail Goatfish (Mulloidichthys martinicus)
@@ -20,47 +15,19 @@ export interface CleaningTargetSpot {
  * - Smooth geometric body planes with pearlescent and yellow-gold gradients
  * - Large, expressive golden-amber coral eye
  */
-export class YellowtailGoatfish {
-  public pos: Vector2D = { x: 0, y: 0 };
-  public targetPos: Vector2D = { x: 0, y: 0 };
-  public heading: number = Math.PI; // Facing left toward the cleaning station in profile
-
+export class YellowtailGoatfish extends ClientFishBase {
   // Scaled up by 20% (from 2.0 to 2.4)
   public scale: number = 2.4;
-
-  public state: 'entering' | 'stationary' | 'exiting' | 'exited' = 'entering';
-  public entrySpeed: number = 2.8;
-  public exitSpeed: number = 3.4;
-
-  public animTime: number = 0;
-  public breathPhase: number = 0;
-  public finPhase: number = 0;
   public barbelPhase: number = 0;
   public mouthAperture: number = 0.8;
 
-  public isVisible: boolean = true;
-
-  // Procedural Turn & Perspective Facing State
-  public facingPlayer: boolean = false;
-  public turnProgress: number = 0; // 0.0 = Profile (side view), 1.0 = Facing Player
-  public turnSpeed: number = 0.0075;
-
-  // Parasites on chin barbels, mouth, and silver/yellow body
-  public parasites: Parasite[] = [];
-
-  // Cavity gates driven by the ClientDirector (1 = open/eatable):
-  // gill parasites hide under the operculum flap, teeth behind the lips.
-  public gillOpen: number = 1;
-  public mouthGate: number = 1;
+  protected hitBox = { minX: -45, maxX: 55, minY: -28, maxY: 28 };
 
   constructor(canvasWidth: number, canvasHeight: number) {
-    // Start offscreen to the right
+    super();
+    // Start offscreen to the right; the director swims the fish in from here
     this.pos = {
       x: canvasWidth + 450,
-      y: canvasHeight * 0.48,
-    };
-    this.targetPos = {
-      x: this.getProfileTargetX(canvasWidth),
       y: canvasHeight * 0.48,
     };
 
@@ -71,7 +38,7 @@ export class YellowtailGoatfish {
   /**
    * Initialize parasites over the chin barbels, subterminal mouth, and slender body
    */
-  private initParasites() {
+  protected initParasites() {
     this.parasites = [];
     let id = 200;
 
@@ -191,173 +158,12 @@ export class YellowtailGoatfish {
     return { x: lx, y: ly };
   }
 
-  public getParasiteWorldPos(p: Parasite): Vector2D {
-    const local = this.getParasiteLocalPos(p);
-    return {
-      x: this.pos.x + local.x,
-      y: this.pos.y + local.y,
-    };
-  }
-
-  public updateParasites(
-    wrasseMouth: Vector2D | null,
-    gobiMouth: Vector2D | null,
-    _dt: number,
-    wrasseScale: number = 0.9,
-    gobiScale: number = 0.65
-  ) {
-    if (this.turnProgress > 0.4) return;
-
-    const wrasseEatDist = 20 * wrasseScale;
-    const gobiEatDist = 18 * gobiScale;
-
-    for (const p of this.parasites) {
-      if (p.removed) continue;
-      if (p.attachPart === 'operculum' && this.gillOpen < 0.6) continue;
-      if ((p.attachPart === 'upperTeeth' || p.attachPart === 'lowerTeeth') && this.mouthGate < 0.6) continue;
-
-      const wPos = this.getParasiteWorldPos(p);
-      let isEaten = false;
-
-      if (wrasseMouth) {
-        const d = Math.hypot(wPos.x - wrasseMouth.x, wPos.y - wrasseMouth.y);
-        if (d <= wrasseEatDist) isEaten = true;
-      }
-
-      if (!isEaten && gobiMouth) {
-        const d = Math.hypot(wPos.x - gobiMouth.x, wPos.y - gobiMouth.y);
-        if (d <= gobiEatDist) isEaten = true;
-      }
-
-      if (isEaten) {
-        p.removed = true;
-        p.hoverTimer = 1;
-      }
-    }
-  }
-
-  public getActiveParasitePositions(): Vector2D[] {
-    const spots: Vector2D[] = [];
-    for (const p of this.parasites) {
-      if (!p.removed) {
-        spots.push(this.getParasiteWorldPos(p));
-      }
-    }
-    return spots;
-  }
-
-  public getParasiteStats() {
-    let teethTotal = 0;
-    let teethRemoved = 0;
-    let bodyTotal = 0;
-    let bodyRemoved = 0;
-
-    for (const p of this.parasites) {
-      if (p.type === 'teeth') {
-        teethTotal++;
-        if (p.removed) teethRemoved++;
-      } else {
-        bodyTotal++;
-        if (p.removed) bodyRemoved++;
-      }
-    }
-
-    const total = teethTotal + bodyTotal;
-    const removed = teethRemoved + bodyRemoved;
-    const remaining = total - removed;
-
-    return {
-      total,
-      remaining,
-      removed,
-      teethRemaining: teethTotal - teethRemoved,
-      bodyRemaining: bodyTotal - bodyRemoved,
-    };
-  }
-
-  /**
-   * Calculate target X so the entire fish (from snout & barbels to forked yellow caudal tail tip) is fully visible,
-   * anchored cleanly on the right side of the screen.
-   */
-  private getProfileTargetX(canvasWidth: number): number {
-    const s = this.scale;
-    // Whole body length from snout (-35 * s) to forked tail tip (+96 * s) is ~131 * s.
-    return canvasWidth - (97 * s + 24);
-  }
-
-  private getFacingTargetX(canvasWidth: number): number {
-    return Math.max(canvasWidth * 0.72, canvasWidth - 280);
-  }
-
-  public toggleFacingPlayer(): boolean {
-    return false;
-  }
-
-  public setFacingPlayer(_facing: boolean) {
-    this.facingPlayer = false;
-  }
-
-  public startExit() {
-    if (this.state !== 'exited') {
-      this.state = 'exiting';
-      this.facingPlayer = false;
-    }
-  }
-
-  public hitTest(pos: Vector2D): boolean {
-    const s = this.scale;
-    const dx = pos.x - this.pos.x;
-    const dy = pos.y - this.pos.y;
-    const minX = -45 * s;
-    const maxX = 55 * s;
-    const minY = -28 * s;
-    const maxY = 28 * s;
-    return dx >= minX && dx <= maxX && dy >= minY && dy <= maxY;
-  }
-
-  public update(width: number, height: number, dt: number = 1) {
+  public update(_w: number, _h: number, dt: number = 1) {
     const safeDt = clamp(dt, 0.2, 2.0);
     this.animTime += 0.03 * safeDt;
     this.breathPhase += 0.035 * safeDt;
     this.finPhase += 0.06 * safeDt;
     this.barbelPhase += 0.045 * safeDt;
-
-    this.turnProgress = 0;
-    this.facingPlayer = false;
-
-    const profileX = this.getProfileTargetX(width);
-    const desiredTargetY = height * 0.48;
-
-    this.targetPos.x = profileX;
-    this.targetPos.y = desiredTargetY;
-
-    if (this.state === 'entering') {
-      const dx = this.targetPos.x - this.pos.x;
-      const dy = this.targetPos.y - this.pos.y;
-      const dist = Math.hypot(dx, dy);
-
-      if (dist > 4) {
-        this.pos.x += (dx / dist) * this.entrySpeed * safeDt;
-        this.pos.y += (dy / dist) * this.entrySpeed * safeDt;
-      } else {
-        this.pos.x = this.targetPos.x;
-        this.pos.y = this.targetPos.y;
-        this.state = 'stationary';
-      }
-    } else if (this.state === 'exiting') {
-      // Reversing backwards to the right off screen
-      this.pos.x += this.exitSpeed * 1.5 * safeDt;
-      if (this.pos.x > width + 450) {
-        this.state = 'exited';
-        this.isVisible = false;
-      }
-    } else if (this.state === 'stationary') {
-      const buoyancyY = Math.sin(this.breathPhase * 0.7) * 2.8;
-      const buoyancyX = Math.cos(this.breathPhase * 0.45) * 1.2;
-
-      this.pos.x = lerp(this.pos.x, this.targetPos.x + buoyancyX, 0.035 * safeDt);
-      this.pos.y = lerp(this.pos.y, this.targetPos.y + buoyancyY, 0.035 * safeDt);
-    }
 
     // Mouth aperture
     this.mouthAperture = 0.8 + Math.sin(this.breathPhase) * 0.04;
@@ -463,27 +269,6 @@ export class YellowtailGoatfish {
     this.renderParasites(ctx);
 
     ctx.restore();
-  }
-
-  private renderParasites(ctx: CanvasRenderingContext2D) {
-    const unit = parasiteUnit(this.scale);
-    for (const p of this.parasites) {
-      const local = this.getParasiteLocalPos(p);
-      if (p.removed) {
-        if (p.hoverTimer > 0) {
-          ctx.save();
-          ctx.translate(local.x, local.y);
-          drawEatRing(ctx, unit, p.hoverTimer);
-          ctx.restore();
-          p.hoverTimer -= 0.02;
-        }
-        continue;
-      }
-      ctx.save();
-      ctx.translate(local.x, local.y);
-      drawParasite(ctx, unit, this.animTime, p.id, p.type === 'teeth');
-      ctx.restore();
-    }
   }
 
   /**
@@ -874,211 +659,5 @@ export class YellowtailGoatfish {
     ctx.lineWidth = 0.8;
     ctx.stroke();
     ctx.restore();
-  }
-
-  // =========================================================================
-  // FRONT-FACING VIEW RENDERING (Yellowtail Goatfish)
-  // Slender silvery head vault, two chin barbels hanging downward symmetrically,
-  // subterminal mouth beneath the snout, and high-set golden eyes.
-  // =========================================================================
-
-  private renderFrontFacing(
-    ctx: CanvasRenderingContext2D,
-    s: number,
-    breath: number,
-    finFlutter: number,
-    barbelFlutter: number,
-    alpha: number = 1.0
-  ) {
-    ctx.save();
-    if (alpha < 1.0) {
-      ctx.globalAlpha = ctx.globalAlpha * alpha;
-    }
-
-    const mouthOpen = this.mouthAperture;
-    const breathShift = breath * 1.5;
-    const flare = breath * 2.5;
-
-    // 1. Symmetrical Smooth Pectoral Fins
-    this.renderFrontSmoothPectoralFins(ctx, s, finFlutter);
-
-    // 2. Anterior Dorsal Fin Tip
-    this.renderFrontSmoothDorsalFin(ctx, s, finFlutter);
-
-    // 3. Slender Silvery Head Vault
-    this.renderFrontSmoothHeadVault(ctx, s, breathShift, flare);
-
-    // 4. Subterminal Ventral Mouth
-    this.renderFrontSmoothMouth(ctx, s, mouthOpen);
-
-    // 5. Two Symmetrical Chin Barbels Hanging Downward
-    this.renderFrontSmoothBarbels(ctx, s, barbelFlutter);
-
-    // 6. Radiant Golden Lateral Eyes
-    this.renderFrontSmoothEyes(ctx, s);
-
-    ctx.restore();
-  }
-
-  private renderFrontSmoothPectoralFins(ctx: CanvasRenderingContext2D, s: number, finFlutter: number) {
-    const scullLeft = finFlutter * 0.30;
-    const scullRight = -finFlutter * 0.30;
-
-    for (const side of [-1, 1]) {
-      ctx.save();
-      const rootX = side * 16 * s;
-      const rootY = 4 * s;
-      ctx.translate(rootX, rootY);
-      ctx.rotate(side === -1 ? scullLeft : scullRight);
-
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.bezierCurveTo(side * 10 * s, -8 * s, side * 22 * s, -4 * s, side * 24 * s, 3 * s);
-      ctx.bezierCurveTo(side * 20 * s, 10 * s, side * 8 * s, 12 * s, 0, 0);
-      ctx.closePath();
-
-      const fGrad = ctx.createLinearGradient(0, 0, side * 24 * s, 3 * s);
-      fGrad.addColorStop(0, 'rgba(241, 245, 249, 0.8)');
-      fGrad.addColorStop(0.6, 'rgba(254, 240, 138, 0.7)');
-      fGrad.addColorStop(1, 'rgba(250, 204, 21, 0.6)');
-      ctx.fillStyle = fGrad;
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-      ctx.lineWidth = 0.8;
-      ctx.stroke();
-
-      ctx.restore();
-    }
-  }
-
-  private renderFrontSmoothDorsalFin(ctx: CanvasRenderingContext2D, s: number, finFlutter: number) {
-    const wave = finFlutter * 1.2;
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(0, -18 * s);
-    ctx.bezierCurveTo(-8 * s, -26 * s + wave * 0.5, -4 * s, -32 * s + wave, 0, -33 * s + wave);
-    ctx.bezierCurveTo(4 * s, -32 * s + wave, 8 * s, -26 * s + wave * 0.5, 0, -18 * s);
-    ctx.closePath();
-
-    const dGrad = ctx.createLinearGradient(0, -18 * s, 0, -33 * s);
-    dGrad.addColorStop(0, '#e2e8f0');
-    dGrad.addColorStop(0.6, '#facc15');
-    dGrad.addColorStop(1, '#fef08a');
-    ctx.fillStyle = dGrad;
-    ctx.fill();
-    ctx.restore();
-  }
-
-  private renderFrontSmoothHeadVault(ctx: CanvasRenderingContext2D, s: number, breathShift: number, flare: number) {
-    ctx.save();
-    ctx.beginPath();
-    // Slender crown
-    ctx.moveTo(0, -18 * s);
-    // Smooth rounded brow & side slope
-    ctx.bezierCurveTo(-12 * s, -16 * s, -18 * s - flare * 0.5, -8 * s, -20 * s - flare, 0);
-    // Cheek to subterminal chin
-    ctx.bezierCurveTo(-18 * s - flare, 8 * s, -10 * s, 16 * s + breathShift, 0, 18 * s + breathShift);
-    // Symmetrical right side
-    ctx.bezierCurveTo(10 * s, 16 * s + breathShift, 18 * s + flare, 8 * s, 20 * s + flare, 0);
-    ctx.bezierCurveTo(18 * s + flare * 0.5, -8 * s, 12 * s, -16 * s, 0, -18 * s);
-    ctx.closePath();
-
-    const vaultGrad = ctx.createRadialGradient(0, -2 * s, 2 * s, 0, 0, 24 * s);
-    vaultGrad.addColorStop(0, '#ffffff');
-    vaultGrad.addColorStop(0.4, '#f1f5f9');
-    vaultGrad.addColorStop(0.75, '#cbd5e1');
-    vaultGrad.addColorStop(1, '#94a3b8');
-    ctx.fillStyle = vaultGrad;
-    ctx.fill();
-
-    // Golden lateral stripes glowing on the side margins
-    ctx.beginPath();
-    ctx.ellipse(-14 * s, 0, 4 * s, 2 * s, -0.2, 0, Math.PI * 2);
-    ctx.ellipse(14 * s, 0, 4 * s, 2 * s, 0.2, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(250, 204, 21, 0.5)';
-    ctx.fill();
-
-    ctx.restore();
-  }
-
-  private renderFrontSmoothMouth(ctx: CanvasRenderingContext2D, s: number, mouthOpen: number) {
-    const rx = 8 * s;
-    const ry = 5 * mouthOpen * s;
-    const cy = 10 * s;
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.ellipse(0, cy, rx, ry, 0, 0, Math.PI * 2);
-    const mouthGrad = ctx.createRadialGradient(0, cy, 1 * s, 0, cy, rx);
-    mouthGrad.addColorStop(0, '#0f172a');
-    mouthGrad.addColorStop(0.7, '#334155');
-    mouthGrad.addColorStop(1, '#f1f5f9');
-    ctx.fillStyle = mouthGrad;
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(203, 213, 225, 0.6)';
-    ctx.lineWidth = 1.0;
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  private renderFrontSmoothBarbels(ctx: CanvasRenderingContext2D, s: number, barbelFlutter: number) {
-    const swayLeft = Math.sin(this.barbelPhase) * 2.5;
-    const swayRight = Math.sin(this.barbelPhase + 0.4) * 2.5;
-
-    for (const side of [-1, 1]) {
-      const sway = side === -1 ? swayLeft : swayRight;
-      ctx.save();
-      ctx.beginPath();
-      ctx.moveTo(side * 3 * s, 14 * s);
-      ctx.quadraticCurveTo(side * (5 * s + sway * 0.5), 22 * s, side * (7 * s + sway), 30 * s);
-      ctx.quadraticCurveTo(side * (4 * s + sway * 0.6), 22 * s, side * 1.5 * s, 14 * s);
-      ctx.closePath();
-
-      const bGrad = ctx.createLinearGradient(side * 3 * s, 14 * s, side * 7 * s, 30 * s);
-      bGrad.addColorStop(0, '#fef08a');
-      bGrad.addColorStop(0.7, '#facc15');
-      bGrad.addColorStop(1, '#ffffff');
-      ctx.fillStyle = bGrad;
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(234, 179, 8, 0.6)';
-      ctx.lineWidth = 0.8;
-      ctx.stroke();
-      ctx.restore();
-    }
-  }
-
-  private renderFrontSmoothEyes(ctx: CanvasRenderingContext2D, s: number) {
-    for (const side of [-1, 1]) {
-      const eyeX = side * 18 * s;
-      const eyeY = -8 * s;
-      const eyeRadius = 3.6 * s;
-
-      ctx.save();
-      // Orbital Ring
-      ctx.beginPath();
-      ctx.arc(eyeX, eyeY, eyeRadius + 0.8 * s, 0, Math.PI * 2);
-      ctx.fillStyle = '#facc15';
-      ctx.fill();
-
-      // Iris
-      ctx.beginPath();
-      ctx.arc(eyeX, eyeY, eyeRadius, 0, Math.PI * 2);
-      ctx.fillStyle = '#eab308';
-      ctx.fill();
-
-      // Pupil
-      ctx.beginPath();
-      ctx.arc(eyeX - side * 0.6 * s, eyeY, eyeRadius * 0.55, 0, Math.PI * 2);
-      ctx.fillStyle = '#020617';
-      ctx.fill();
-
-      // Specular
-      ctx.beginPath();
-      ctx.arc(eyeX - side * 1.1 * s, eyeY - 1.0 * s, 1.2 * s, 0, Math.PI * 2);
-      ctx.fillStyle = '#ffffff';
-      ctx.fill();
-      ctx.restore();
-    }
   }
 }

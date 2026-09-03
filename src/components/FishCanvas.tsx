@@ -1,24 +1,26 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { CleanerWrasse } from '../simulation/CleanerWrasse';
+import React, { useEffect, useRef, useState } from 'react';
+import { SpanishHogfish } from '../simulation/SpanishHogfish';
 import { SharknoseGoby } from '../simulation/SharknoseGoby';
 import { Reef } from '../simulation/Reef';
-import { ClientDirector, ClientFish, ClientSlot } from '../simulation/ClientDirector';
+import { ClientDirector } from '../simulation/ClientDirector';
+import { SPECIES } from '../data/species';
 import { AmbientSchool } from '../simulation/AmbientSchool';
-import { ControlledFish, ClientFishInfo, ClientFishSpecies } from '../types';
+import { ControlledFish, ClientFishInfo } from '../types';
 import { playNibbleSound, initAudioOnInteraction } from '../utils/audio';
-
-export type ActiveClientFish = ClientFish;
+import { EffectsLayer } from '../render/effects';
+import { drawGillFlap } from '../render/gillFlap';
+import { drawCleanedSparkles } from '../render/sparkles';
+import { drawBehindReefClients, drawOpenWaterClients } from '../render/clientLayer';
+import { computeCleanerTargets } from '../simulation/targeting';
 
 interface FishCanvasProps {
   isRunning: boolean;
-  onToggleRunning?: () => void;
   selectedFish: ControlledFish;
   onSelectFish: (fish: ControlledFish) => void;
-  wrasseScale: number;
-  wrasseSpeed: number;
-  gobiScale: number;
-  gobiSpeed: number;
-  skipTrigger?: number;
+  hogfishScale: number;
+  hogfishSpeed: number;
+  gobyScale: number;
+  gobySpeed: number;
   pausePatience?: boolean;
   onParasiteStatsUpdate?: (stats: {
     total: number;
@@ -31,185 +33,16 @@ interface FishCanvasProps {
   onClientCleaned?: () => void;
 }
 
-interface WaterRipple {
-  x: number;
-  y: number;
-  radius: number;
-  maxRadius: number;
-  alpha: number;
-}
-
-interface MicroBubble {
-  x: number;
-  y: number;
-  size: number;
-  speed: number;
-  wobble: number;
-  alpha: number;
-}
-
 const AMBIENT_SCHOOL_COUNT = 7;
-
-// Gill-flap cover colors per species, matched to each body palette
-// (base = the flap plate, edge = its darker margin - no muddy browns)
-const FLAP_COLOR: Record<ClientFishSpecies, { base: string; edge: string }> = {
-  grouper: { base: '#f97316', edge: '#b45309' }, // unused: grouper lifts its own art
-  queen_parrotfish: { base: '#2dd4bf', edge: '#0f766e' },
-  queen_triggerfish: { base: '#38bdf8', edge: '#155e75' },
-  yellowtail_goatfish: { base: '#ece6cd', edge: '#b3ab84' },
-  french_grunt: { base: '#f0dd8f', edge: '#b09b4a' },
-  whitespotted_filefish: { base: '#ab9f92', edge: '#6e6357' },
-  trumpetfish: { base: '#c89455', edge: '#7c5a2b' },
-  spotted_moray: { base: '#e8d795', edge: '#a08e4e' },
-};
-
-interface ClampBurst {
-  x: number;
-  y: number;
-  age: number; // 0..1
-  golden?: boolean; // mucus-bite burst
-  mini?: boolean; // small green nibble pop
-}
-
-interface Floater {
-  x: number;
-  y: number;
-  text: string;
-  color: string;
-  age: number; // 0..1
-}
-
-export function getClientSpeciesMetadata(species: ClientFishSpecies) {
-  switch (species) {
-    case 'grouper':
-      return {
-        name: 'Nassau Grouper',
-        scientificName: 'Epinephelus striatus',
-        size: '~60–120 cm',
-        keyFeatures: [
-          'Heavy predatory cranium',
-          'Sharp conical predator teeth',
-          'Coral red-amber spotted body',
-          'Deep cavernous oral cavity',
-        ],
-      };
-    case 'queen_parrotfish':
-      return {
-        name: 'Queen Parrotfish',
-        scientificName: 'Scarus vetula',
-        size: '~30–60 cm',
-        keyFeatures: [
-          'Deep, laterally compressed body',
-          'Powerful parrot-like beak',
-          'Bright turquoise/blue-green coloration',
-          'Contrasting yellow/orange facial mask',
-          'Distinctive fused dental plates',
-          'Flowing lunate caudal tail',
-        ],
-      };
-    case 'yellowtail_goatfish':
-      return {
-        name: 'Yellowtail Goatfish',
-        scientificName: 'Mulloidichthys martinicus',
-        size: '~25–35 cm',
-        keyFeatures: [
-          'Slender, streamlined body',
-          'Silver/pale iridescent body',
-          'Bright yellow tail',
-          'Yellowish lateral coloration',
-          'Two prominent chin barbels',
-          'Small mouth beneath the head',
-          'Forked tail',
-        ],
-      };
-    case 'queen_triggerfish':
-      return {
-        name: 'Queen Triggerfish',
-        scientificName: 'Balistes vetula',
-        size: '~30–50 cm',
-        keyFeatures: [
-          'Deep, chunky, highly compressed body',
-          'Small puckered mouth',
-          'Large expressive eye',
-          'Tall dorsal spines',
-          'Strong angular fins',
-          'Blue/green/turquoise body',
-          'Yellow/orange accents around face and fins',
-          'Elaborate tail',
-        ],
-      };
-    case 'trumpetfish':
-      return {
-        name: 'Atlantic Trumpetfish',
-        scientificName: 'Aulostomus maculatus',
-        size: '~60–90 cm',
-        keyFeatures: [
-          'Extremely elongated body',
-          'Extremely long tubular snout',
-          'Tiny terminal mouth with chin barbel',
-          'Long dorsal/anal fins toward rear',
-          'Brown, yellow, blue or mottled coloration',
-          'Small eye relative to body',
-          'Very thin tail with black ocellus',
-        ],
-      };
-    case 'spotted_moray':
-      return {
-        name: 'Spotted Moray',
-        scientificName: 'Gymnothorax moringa',
-        size: '~60–150 cm',
-        keyFeatures: [
-          'Long, snake-like body',
-          'No obvious paired fins',
-          'Large rounded head',
-          'Huge mouth',
-          'Prominent teeth',
-          'Small eyes',
-          'Cream/tan body covered with dark spots',
-          'Often shown emerging from a reef crevice',
-        ],
-      };
-    case 'whitespotted_filefish':
-      return {
-        name: 'Whitespotted Filefish',
-        scientificName: 'Cantherhines macrocerus',
-        size: '~25–35 cm',
-        keyFeatures: [
-          'Unusual, deep-bodied/oval shape',
-          'Rough-looking skin texture',
-          'Gray/brown base',
-          'Numerous white spots',
-          'Small mouth',
-          'Tall dorsal spine',
-          'Small pectoral fins',
-        ],
-      };
-    case 'french_grunt':
-      return {
-        name: 'French Grunt',
-        scientificName: 'Haemulon flavolineatum',
-        size: '~20–30 cm',
-        keyFeatures: [
-          'Schooling reef fish',
-          'Arrive, wait, and clean together',
-          'Silver/cream body & golden head',
-          'Yellow horizontal & diagonal stripes',
-          'Electric blue facial markings',
-          'Large expressive eye & small mouth',
-        ],
-      };
-  }
-}
 
 export const FishCanvas: React.FC<FishCanvasProps> = ({
   isRunning,
   selectedFish,
   onSelectFish,
-  wrasseScale,
-  wrasseSpeed,
-  gobiScale,
-  gobiSpeed,
-  skipTrigger,
+  hogfishScale,
+  hogfishSpeed,
+  gobyScale,
+  gobySpeed,
   pausePatience = false,
   onParasiteStatsUpdate,
   onClientFishUpdate,
@@ -217,32 +50,26 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const fishRef = useRef<CleanerWrasse | null>(null);
-  const gobiRef = useRef<SharknoseGoby | null>(null);
+  const fishRef = useRef<SpanishHogfish | null>(null);
+  const gobyRef = useRef<SharknoseGoby | null>(null);
 
   // Traffic controller: one active client + waiting clients
   const directorRef = useRef<ClientDirector | null>(null);
   const schoolsRef = useRef<AmbientSchool[]>([]);
 
   const reefRef = useRef<Reef | null>(null);
-  const ripplesRef = useRef<WaterRipple[]>([]);
-  const burstsRef = useRef<ClampBurst[]>([]);
-  const floatersRef = useRef<Floater[]>([]);
+  // Ripples, micro-bubbles and clamp/nibble bursts
+  const effectsRef = useRef<EffectsLayer>(new EffectsLayer());
   // Which parasite ids we've already popped for, per active client
   const eatSeenRef = useRef<{ slot: unknown; ids: Set<number> } | null>(null);
-  const bubblesRef = useRef<MicroBubble[]>([]);
   const animFrameIdRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(performance.now());
   const selectedFishRef = useRef<ControlledFish>(selectedFish);
   const lastStatsSyncRef = useRef<number>(0);
-  const lastSkipTriggerRef = useRef<number | undefined>(skipTrigger);
+  const lastInfoSyncRef = useRef<number>(0);
   const lastPointerTsRef = useRef<number>(performance.now());
 
   const onClientCleanedRef = useRef<typeof onClientCleaned>(onClientCleaned);
-  const pendingActivationRef = useRef<{
-    slot: ClientSlot;
-    remainingSec: number;
-  } | null>(null);
 
   const [cursor, setCursor] = useState<{ x: number; y: number; visible: boolean }>({
     x: 0,
@@ -272,50 +99,25 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
     height: 600,
   });
 
-  // Handle Skip: send the active client on its way, promote the next
-  useEffect(() => {
-    if (skipTrigger !== undefined && skipTrigger !== lastSkipTriggerRef.current) {
-      lastSkipTriggerRef.current = skipTrigger;
-      directorRef.current?.skipActive();
-    }
-  }, [skipTrigger]);
-
-  // Initialize bubbles
-  const initBubbles = useCallback((width: number, height: number) => {
-    const bubbles: MicroBubble[] = [];
-    const count = 28;
-    for (let i = 0; i < count; i++) {
-      bubbles.push({
-        x: Math.random() * width,
-        y: Math.random() * height,
-        size: 1.2 + Math.random() * 2.5,
-        speed: 0.35 + Math.random() * 0.75,
-        wobble: Math.random() * Math.PI * 2,
-        alpha: 0.15 + Math.random() * 0.45,
-      });
-    }
-    bubblesRef.current = bubbles;
-  }, []);
-
   // Update cleaner fish configuration
   useEffect(() => {
     if (fishRef.current) {
       fishRef.current.setRunning(isRunning);
-      fishRef.current.config.scale = wrasseScale;
-      fishRef.current.config.baseSpeed = wrasseSpeed;
+      fishRef.current.config.scale = hogfishScale;
+      fishRef.current.config.baseSpeed = hogfishSpeed;
     }
-    if (gobiRef.current) {
-      gobiRef.current.setRunning(isRunning);
-      gobiRef.current.config.scale = gobiScale;
-      gobiRef.current.config.baseSpeed = gobiSpeed;
+    if (gobyRef.current) {
+      gobyRef.current.setRunning(isRunning);
+      gobyRef.current.config.scale = gobyScale;
+      gobyRef.current.config.baseSpeed = gobySpeed;
     }
-  }, [isRunning, wrasseScale, wrasseSpeed, gobiScale, gobiSpeed]);
+  }, [isRunning, hogfishScale, hogfishSpeed, gobyScale, gobySpeed]);
 
   // Reset pointer on window blur
   useEffect(() => {
     const handleBlur = () => {
       fishRef.current?.setPointer(null, false);
-      gobiRef.current?.setPointer(null, false);
+      gobyRef.current?.setPointer(null, false);
     };
 
     window.addEventListener('blur', handleBlur);
@@ -336,27 +138,31 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
           setDimensions({ width, height });
 
           if (!fishRef.current) {
-            fishRef.current = new CleanerWrasse(width * 0.35, height * 0.45);
-            fishRef.current.config.scale = wrasseScale;
-            fishRef.current.config.baseSpeed = wrasseSpeed;
+            fishRef.current = new SpanishHogfish(width * 0.35, height * 0.45);
+            fishRef.current.config.scale = hogfishScale;
+            fishRef.current.config.baseSpeed = hogfishSpeed;
             fishRef.current.setRunning(isRunning);
-            initBubbles(width, height);
+            effectsRef.current.initBubbles(width, height);
           }
 
-          if (!gobiRef.current) {
-            gobiRef.current = new SharknoseGoby(width, height);
-            gobiRef.current.config.scale = gobiScale;
-            gobiRef.current.config.baseSpeed = gobiSpeed;
-            gobiRef.current.setRunning(isRunning);
+          if (!gobyRef.current) {
+            gobyRef.current = new SharknoseGoby(width, height);
+            gobyRef.current.config.scale = gobyScale;
+            gobyRef.current.config.baseSpeed = gobySpeed;
+            gobyRef.current.setRunning(isRunning);
           }
 
           if (!directorRef.current) {
-            directorRef.current = new ClientDirector();
+            // Dev/testing: ?first=spotted_moray makes that species arrive first
+            const first = new URLSearchParams(window.location.search).get('first');
+            directorRef.current = new ClientDirector(
+              first && first in SPECIES ? (first as keyof typeof SPECIES) : null
+            );
             directorRef.current.onClientCleaned = () => onClientCleanedRef.current?.();
             // Dev convenience: lets tests and the console inspect the tank
             (window as unknown as { __director?: ClientDirector }).__director =
               directorRef.current;
-            (window as unknown as { __cleaners?: unknown[] }).__cleaners = [fishRef, gobiRef];
+            (window as unknown as { __cleaners?: unknown[] }).__cleaners = [fishRef, gobyRef];
           }
 
           if (schoolsRef.current.length === 0) {
@@ -374,7 +180,7 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
 
     resizeObserver.observe(container);
     return () => resizeObserver.disconnect();
-  }, [wrasseScale, wrasseSpeed, gobiScale, gobiSpeed, isRunning, initBubbles]);
+  }, [hogfishScale, hogfishSpeed, gobyScale, gobySpeed, isRunning]);
 
   // Pointer Interaction Handlers
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -388,31 +194,31 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
     const y = e.clientY - rect.top;
     setCursor({ x, y, visible: true });
 
-    // Check hit tests to see if user clicked the Goby or the Wrasse to select them
-    const hitGobi = gobiRef.current?.hitTest({ x, y });
-    const hitWrasse = fishRef.current?.hitTest({ x, y });
+    // Check hit tests to see if user clicked the Goby or the Hogfish to select them
+    const hitGoby = gobyRef.current?.hitTest({ x, y });
+    const hitHogfish = fishRef.current?.hitTest({ x, y });
 
     let active = selectedFishRef.current;
     let switchedCleaner = false;
 
-    if (hitGobi && !hitWrasse && active !== 'gobi') {
-      active = 'gobi';
-      onSelectFish('gobi');
+    if (hitGoby && !hitHogfish && active !== 'goby') {
+      active = 'goby';
+      onSelectFish('goby');
       switchedCleaner = true;
-    } else if (hitWrasse && !hitGobi && active !== 'wrasse') {
-      active = 'wrasse';
-      onSelectFish('wrasse');
+    } else if (hitHogfish && !hitGoby && active !== 'hogfish') {
+      active = 'hogfish';
+      onSelectFish('hogfish');
       switchedCleaner = true;
-    } else if (hitGobi && hitWrasse) {
-      const distGobi = Math.hypot(
-        x - (gobiRef.current?.headPos.x || 0),
-        y - (gobiRef.current?.headPos.y || 0)
+    } else if (hitGoby && hitHogfish) {
+      const distGoby = Math.hypot(
+        x - (gobyRef.current?.headPos.x || 0),
+        y - (gobyRef.current?.headPos.y || 0)
       );
-      const distWrasse = Math.hypot(
+      const distHogfish = Math.hypot(
         x - (fishRef.current?.headPos.x || 0),
         y - (fishRef.current?.headPos.y || 0)
       );
-      const chosen = distGobi < distWrasse ? 'gobi' : 'wrasse';
+      const chosen = distGoby < distHogfish ? 'goby' : 'hogfish';
       if (chosen !== active) {
         active = chosen;
         onSelectFish(active);
@@ -420,55 +226,37 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
       }
     }
 
-    if (active === 'gobi' && gobiRef.current) {
-      gobiRef.current.setPointer({ x, y }, true);
+    if (active === 'goby' && gobyRef.current) {
+      gobyRef.current.setPointer({ x, y }, true);
       fishRef.current?.setPointer(null, false);
-    } else if (active === 'wrasse' && fishRef.current) {
+    } else if (active === 'hogfish' && fishRef.current) {
       fishRef.current.setPointer({ x, y }, true);
-      gobiRef.current?.setPointer(null, false);
+      gobyRef.current?.setPointer(null, false);
     }
 
     // Manual client invitation from queue: hover cleaner over queue fish + click
     const director = directorRef.current;
     if (!switchedCleaner && director) {
-      const currentCleaner = active === 'wrasse' ? fishRef.current : gobiRef.current;
+      const currentCleaner = active === 'hogfish' ? fishRef.current : gobyRef.current;
       const cleanerHead = currentCleaner ? currentCleaner.headPos : { x, y };
-      const targetSlot =
-        director.findWaitingClientNear(cleanerHead) || director.findWaitingClientNear({ x, y });
+      // Only a click ON a waiting client counts, so ordinary clicks around
+      // the water never accidentally call a fish over
+      const targetSlot = director.findWaitingClientNear({ x, y });
 
-      if (targetSlot && targetSlot.role === 'waiting' && targetSlot.phase !== 'leaving') {
-        // Requirement: 2 second promotion dance
-        currentCleaner?.triggerInviteDance(2.0);
-
-        // Current station fish swims away (does NOT go to queue)
-        director.dismissActive('skipped');
-
-        pendingActivationRef.current = {
-          slot: targetSlot,
-          remainingSec: 2.0,
-        };
-
-        for (let i = 0; i < 9; i++) {
-          burstsRef.current.push({
-            x: cleanerHead.x + (Math.random() - 0.5) * 35,
-            y: cleanerHead.y + (Math.random() - 0.5) * 35,
-            age: 0,
-            golden: true,
-            mini: true,
-          });
-        }
+      if (targetSlot) {
+        // The cleaner sways for a couple of seconds; the client flutters and
+        // sets off almost at once, brightening as it swims closer
+        const DANCE_SECONDS = 2.0;
+        const COME_OVER_AFTER = 0.4;
+        currentCleaner?.triggerInviteDance(DANCE_SECONDS, targetSlot.fish.pos);
+        director.invite(targetSlot, COME_OVER_AFTER, rect.width, rect.height);
+        effectsRef.current.addInviteBurst(cleanerHead.x, cleanerHead.y);
         playNibbleSound();
       }
     }
 
     // Spawn water ripple
-    ripplesRef.current.push({
-      x,
-      y,
-      radius: 5,
-      maxRadius: 45,
-      alpha: 0.45,
-    });
+    effectsRef.current.addRipple(x, y);
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -483,18 +271,18 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
     setCursor({ x, y, visible: true });
 
     const active = selectedFishRef.current;
-    if (active === 'gobi' && gobiRef.current) {
-      gobiRef.current.setPointer({ x, y }, true);
+    if (active === 'goby' && gobyRef.current) {
+      gobyRef.current.setPointer({ x, y }, true);
       fishRef.current?.setPointer(null, false);
-    } else if (active === 'wrasse' && fishRef.current) {
+    } else if (active === 'hogfish' && fishRef.current) {
       fishRef.current.setPointer({ x, y }, true);
-      gobiRef.current?.setPointer(null, false);
+      gobyRef.current?.setPointer(null, false);
     }
   };
 
   const handlePointerLeave = () => {
     fishRef.current?.setPointer(null, false);
-    gobiRef.current?.setPointer(null, false);
+    gobyRef.current?.setPointer(null, false);
     setCursor((prev) => ({ ...prev, visible: false }));
   };
 
@@ -513,6 +301,7 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
 
       const { width, height } = dimensions;
       const dpr = window.devicePixelRatio || 1;
+      const effects = effectsRef.current;
 
       if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
         canvas.width = width * dpr;
@@ -539,83 +328,29 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
         school.render(ctx);
       }
 
-      // --- Micro-Bubbles ---
-      for (let i = 0; i < bubblesRef.current.length; i++) {
-        const b = bubblesRef.current[i];
-        b.y -= b.speed * dt;
-        b.wobble += 0.05 * dt;
-        const wobbleX = b.x + Math.sin(b.wobble) * 4;
-
-        if (b.y < -10) {
-          b.y = height + 10;
-          b.x = Math.random() * width;
-        }
-
-        ctx.beginPath();
-        ctx.arc(wobbleX, b.y, b.size, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(255, 255, 255, ${b.alpha})`;
-        ctx.fill();
-      }
-
-      // --- Water Ripples ---
-      for (let i = ripplesRef.current.length - 1; i >= 0; i--) {
-        const r = ripplesRef.current[i];
-        r.radius += 1.2 * dt;
-        r.alpha -= 0.015 * dt;
-
-        if (r.alpha <= 0 || r.radius >= r.maxRadius) {
-          ripplesRef.current.splice(i, 1);
-          continue;
-        }
-
-        ctx.beginPath();
-        ctx.arc(r.x, r.y, r.radius, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(255, 255, 255, ${r.alpha})`;
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-      }
+      // --- Micro-bubbles + water ripples ---
+      effects.renderBackground(ctx, dt, width, height);
 
       // --- REEF MODE DIRECTOR: arrivals, waiting clients, departures ---
-      const wrasseMouth = fishRef.current ? fishRef.current.getMouthPos() : null;
-      const gobiMouth = gobiRef.current ? gobiRef.current.getMouthPos() : null;
-      const cleanerHeads: { x: number; y: number }[] = [];
-      if (fishRef.current) cleanerHeads.push(fishRef.current.headPos);
-      if (gobiRef.current) cleanerHeads.push(gobiRef.current.headPos);
-
+      const hogfishMouth = fishRef.current ? fishRef.current.getMouthPos() : null;
+      const gobyMouth = gobyRef.current ? gobyRef.current.getMouthPos() : null;
       const director = directorRef.current;
-      // The player's selected cleaner bites (Space) / massages (M); the
-      // other cleaner works the waiting queue in the background
-      const wrasseSelected = selectedFishRef.current === 'wrasse';
-      const selMouth = wrasseSelected ? wrasseMouth : gobiMouth;
-      const offDutyMouth = wrasseSelected ? gobiMouth : wrasseMouth;
+      // The player's selected cleaner works the station; the other cleaner
+      // preps the waiting queue in the background
+      const hogfishSelected = selectedFishRef.current === 'hogfish';
+      const offDutyMouth = hogfishSelected ? gobyMouth : hogfishMouth;
       if (director && isRunning) {
         director.update(
           width,
           height,
           dt,
-          cleanerHeads,
-          wrasseMouth,
-          gobiMouth,
-          wrasseScale,
-          gobiScale,
-          selMouth,
-          false,
-          false,
+          hogfishMouth,
+          gobyMouth,
+          hogfishScale,
+          gobyScale,
           offDutyMouth,
-          wrasseSelected ? gobiScale : wrasseScale
+          hogfishSelected ? gobyScale : hogfishScale
         );
-      }
-
-      // Update pending queue client manual invitation countdown
-      if (pendingActivationRef.current) {
-        const pending = pendingActivationRef.current;
-        pending.remainingSec -= dt / 60;
-        if (pending.remainingSec <= 0) {
-          if (director && pending.slot.phase !== 'leaving') {
-            director.promote(pending.slot, width, height);
-          }
-          pendingActivationRef.current = null;
-        }
       }
 
       const lists = director
@@ -623,12 +358,7 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
         : { behindReef: [], openWater: [] };
 
       // The moray draws behind the reef wall it emerges from
-      for (const slot of lists.behindReef) {
-        ctx.save();
-        ctx.globalAlpha *= slot.alpha;
-        slot.fish.render(ctx);
-        ctx.restore();
-      }
+      drawBehindReefClients(ctx, lists.behindReef);
 
       // Render Coral Reef Wall (sloping from bottom left)
       if (reefRef.current) {
@@ -639,257 +369,44 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
       }
 
       // Open-water clients: far (small, translucent) first, near ones last
-      for (const slot of lists.openWater) {
-        ctx.save();
-        ctx.globalAlpha *= slot.alpha;
-        const fx = slot.fish.pos.x;
-        const fy = slot.fish.pos.y;
-        // Mirrored fish face right: flip the drawing around the fish's own x
-        if (slot.mirrored) {
-          ctx.translate(fx, fy);
-          ctx.scale(-1, 1);
-          ctx.translate(-fx, -fy);
-        }
-        // Subtle body pitch while traveling without distorting shear
-        const isLeaving = slot.phase === 'leaving';
-        const flex = isLeaving
-          ? Math.min(0.006, slot.lastSpeed * 0.001)
-          : Math.min(0.018, slot.lastSpeed * 0.0025);
-        if (flex > 0.002) {
-          const beat = slot.bobPhase * 3.5;
-          ctx.translate(fx, fy);
-          ctx.rotate(Math.sin(beat) * flex);
-          ctx.translate(-fx, -fy);
-        }
-        slot.fish.render(ctx);
-        ctx.restore();
-      }
+      drawOpenWaterClients(ctx, lists.openWater);
 
       // Full-body sparkles over a fully-cleaned client during its happy pause
       for (const slot of [...lists.behindReef, ...lists.openWater]) {
-        if (!(slot.phase === 'leaving' && slot.leaveReason === 'cleaned' && slot.shimmyT > 0)) continue;
-        const s = slot.fish.scale;
-        ctx.save();
-        if (slot.species === 'french_grunt' && 'getMembersWorldPositions' in slot.fish) {
-          const mPositions = (slot.fish as any).getMembersWorldPositions() as { x: number; y: number }[];
-          for (const mPos of mPositions) {
-            for (let i = 0; i < 7; i++) {
-              const tw = (Math.sin(slot.bobPhase * 8 + i * 2.1) + 1) / 2;
-              if (tw < 0.3) continue;
-              const px = mPos.x + Math.sin(i * 3.7 + 1.3) * 36 * (0.4 + s * 0.14);
-              const py = mPos.y + Math.cos(i * 2.9 + 0.7) * 16 * (0.4 + s * 0.14);
-              const r = 2 + tw * 2.5;
-              ctx.strokeStyle = `rgba(253, 230, 138, ${0.35 + tw * 0.6})`;
-              ctx.lineWidth = 1.3;
-              ctx.beginPath();
-              ctx.moveTo(px - r, py);
-              ctx.lineTo(px + r, py);
-              ctx.moveTo(px, py - r);
-              ctx.lineTo(px, py + r);
-              ctx.stroke();
-              ctx.beginPath();
-              ctx.arc(px, py, 1.0, 0, Math.PI * 2);
-              ctx.fillStyle = `rgba(255, 251, 235, ${0.5 + tw * 0.5})`;
-              ctx.fill();
-            }
-          }
-        } else {
-          for (let i = 0; i < 11; i++) {
-            const tw = (Math.sin(slot.bobPhase * 8 + i * 2.1) + 1) / 2;
-            if (tw < 0.3) continue;
-            const px = slot.pos.x + Math.sin(i * 3.7 + 1.3) * 48 * (0.4 + s * 0.14);
-            const py = slot.pos.y + Math.cos(i * 2.9 + 0.7) * 20 * (0.4 + s * 0.14);
-            const r = 2 + tw * 3;
-            ctx.strokeStyle = `rgba(253, 230, 138, ${0.35 + tw * 0.6})`;
-            ctx.lineWidth = 1.4;
-            ctx.beginPath();
-            ctx.moveTo(px - r, py);
-            ctx.lineTo(px + r, py);
-            ctx.moveTo(px, py - r);
-            ctx.lineTo(px, py + r);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.arc(px, py, 1.1, 0, Math.PI * 2);
-            ctx.fillStyle = `rgba(255, 251, 235, ${0.5 + tw * 0.5})`;
-            ctx.fill();
-          }
-        }
-        ctx.restore();
+        drawCleanedSparkles(ctx, slot);
       }
 
       // --- Gill flap + clamp comedy for the active client ---
       const activeSlot = director ? director.active() : null;
-      // The grouper and french grunt trio lift their own drawn opercula; everyone else gets the
-      // overlay flap
-      if (
-        activeSlot &&
-        activeSlot.species !== 'grouper' &&
-        activeSlot.species !== 'french_grunt' &&
-        activeSlot.cavGill.anchorLocal
-      ) {
-        const cav = activeSlot.cavGill;
-        const fpx = activeSlot.fish.pos.x;
-        const ax = fpx + (activeSlot.mirrored ? -cav.anchorLocal.x : cav.anchorLocal.x);
-        const ay = activeSlot.fish.pos.y + cav.anchorLocal.y;
-        const s = Math.min(4.5, Math.max(1.6, activeSlot.fish.scale));
-        const r = 8 * s;
-        const dir = activeSlot.mirrored ? -1 : 1;
-        // Hinge at the flap's upper rear; opens by rotating up and back,
-        // wiggles as the composure warning, flushes red before the clamp
-        const lift = 0.05 + Math.max(0, cav.open) * 0.24; // a modest crack, rear edge lifting
-
-        // Gill chamber revealed as the flap lifts: dark recess with red
-        // filament combs - so there's something alive under the cover
-        if (cav.open > 0.05) {
-          // A narrow slit of gill peeking from under the flap's REAR edge -
-          // a modest crack, not a wound
-          ctx.save();
-          ctx.globalAlpha *= activeSlot.alpha * Math.min(1, cav.open * 1.6);
-          ctx.translate(ax, ay);
-          ctx.scale(dir, 1);
-          ctx.beginPath();
-          ctx.ellipse(r * 0.38, r * 0.12, r * 0.3, r * 0.58, -0.18, 0, Math.PI * 2);
-          ctx.fillStyle = '#38090e';
-          ctx.fill();
-          // Comb-like gill filaments: two arch rows of many fine strokes
-          for (let row = 0; row < 2; row++) {
-            ctx.strokeStyle = row === 1 ? '#d94550' : '#8f1f28';
-            ctx.lineWidth = r * 0.05;
-            ctx.lineCap = 'round';
-            const rx = r * (0.24 + row * 0.16);
-            for (let g = 0; g < 7; g++) {
-              const t = -0.5 + g / 6;
-              const cy0 = r * 0.12 + t * r * 0.9;
-              const bow = (1 - Math.abs(t * 2)) * r * 0.08;
-              ctx.beginPath();
-              ctx.moveTo(rx + bow, cy0);
-              ctx.lineTo(rx + bow + r * 0.2, cy0 + r * 0.05);
-              ctx.stroke();
-            }
-          }
-          ctx.restore();
-        }
-
-        // The flap cover: hinged at its FRONT-top edge like a real
-        // operculum, so it swings up and toward the tail as it opens
-        ctx.save();
-        ctx.globalAlpha *= activeSlot.alpha * 0.92;
-        ctx.translate(ax - dir * r * 0.5, ay - r * 0.7);
-        ctx.scale(dir, 1); // +x now points toward the tail
-        ctx.rotate(-lift);
-        ctx.beginPath();
-        ctx.moveTo(0, 0);
-        ctx.quadraticCurveTo(r * 1.15, r * 0.1, r * 1.25, r * 0.85);
-        ctx.quadraticCurveTo(r * 1.0, r * 1.5, r * 0.35, r * 1.55);
-        ctx.quadraticCurveTo(-r * 0.15, r * 1.1, 0, 0);
-        ctx.closePath();
-        const flapCol = FLAP_COLOR[activeSlot.species];
-        const flapGrad = ctx.createLinearGradient(0, 0, r * 1.25, r * 0.9);
-        flapGrad.addColorStop(0, flapCol.base);
-        flapGrad.addColorStop(1, flapCol.edge);
-        ctx.fillStyle = flapGrad;
-        ctx.fill();
-        if (cav.open > 0.15 && cav.composure < 0.6) {
-          ctx.fillStyle = `rgba(220, 38, 38, ${(0.6 - cav.composure) * 0.3})`;
-          ctx.fill();
-        }
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
-        ctx.lineWidth = 1.1;
-        ctx.stroke();
-        ctx.restore();
-      }
+      if (activeSlot) drawGillFlap(ctx, activeSlot);
 
       // Clamp bubble bursts
       if (director) {
         for (const ev of director.drainClampEvents()) {
           const fpx = activeSlot ? activeSlot.fish.pos.x : ev.x;
           const bx = activeSlot && activeSlot.mirrored ? 2 * fpx - ev.x : ev.x;
-          burstsRef.current.push({ x: bx, y: ev.y, age: 0 });
+          effects.addBurst(bx, ev.y);
           // The director already knows exactly who was caught in the snap
-          if (ev.hitWrasse && fishRef.current) fishRef.current.spit({ x: bx, y: ev.y });
-          if (ev.hitGoby && gobiRef.current) gobiRef.current.spit({ x: bx, y: ev.y });
+          if (ev.hitHogfish && fishRef.current) fishRef.current.spit({ x: bx, y: ev.y });
+          if (ev.hitGoby && gobyRef.current) gobyRef.current.spit({ x: bx, y: ev.y });
         }
       }
-      for (let i = burstsRef.current.length - 1; i >= 0; i--) {
-        const b = burstsRef.current[i];
-        b.age += dt / (b.mini ? 26 : 45);
-        if (b.age >= 1) {
-          burstsRef.current.splice(i, 1);
-          continue;
-        }
-        ctx.save();
-        ctx.globalAlpha = 1 - b.age;
-        const count = b.mini ? 5 : 8;
-        for (let k = 0; k < count; k++) {
-          const ang = (k / count) * Math.PI * 2 + (b.mini ? 0.5 : 0);
-          const dist = (b.mini ? 3 : 6) + b.age * (b.mini ? 16 : 42);
-          ctx.beginPath();
-          ctx.arc(
-            b.x + Math.cos(ang) * dist,
-            b.y + Math.sin(ang) * dist * 0.7 - b.age * (b.mini ? 12 : 26),
-            b.mini ? 1.4 + (k % 2) : 2.2 + (k % 3),
-            0,
-            Math.PI * 2
-          );
-          ctx.strokeStyle = b.mini
-            ? 'rgba(207, 233, 168, 0.9)'
-            : b.golden
-            ? 'rgba(251, 191, 36, 0.9)'
-            : 'rgba(255, 255, 255, 0.85)';
-          ctx.lineWidth = 1.2;
-          ctx.stroke();
-        }
-        ctx.restore();
-      }
-
-      // Floating score/event popups so cause and effect read instantly
-      for (let i = floatersRef.current.length - 1; i >= 0; i--) {
-        const f = floatersRef.current[i];
-        f.age += dt / 80;
-        if (f.age >= 1) {
-          floatersRef.current.splice(i, 1);
-          continue;
-        }
-        ctx.save();
-        ctx.globalAlpha = f.age < 0.7 ? 1 : 1 - (f.age - 0.7) / 0.3;
-        ctx.font = 'bold 16px ui-monospace, monospace';
-        ctx.textAlign = 'center';
-        ctx.lineWidth = 3;
-        ctx.strokeStyle = 'rgba(0, 10, 25, 0.75)';
-        ctx.strokeText(f.text, f.x, f.y - f.age * 34);
-        ctx.fillStyle = f.color;
-        ctx.fillText(f.text, f.x, f.y - f.age * 34);
-        ctx.restore();
-      }
+      effects.renderBursts(ctx, dt);
 
       // --- Active client drives cleaning targets + UI ---
       const active = activeSlot;
-      let cleaningSpots: { id: string; name: string; pos: { x: number; y: number } }[] = [];
-      let activeParasiteSpots: { x: number; y: number }[] = [];
-
-      if (active && active.phase !== 'leaving') {
-        cleaningSpots = active.fish.getCleaningStationSpots();
-        activeParasiteSpots = active.fish.getActiveParasitePositions();
-        // A mirrored client is drawn flipped, so reflect its reported spots
-        // into true screen space for the cleaners' AI
-        if (active.mirrored) {
-          const px = active.fish.pos.x;
-          cleaningSpots = cleaningSpots.map((sp) => ({
-            ...sp,
-            pos: { x: 2 * px - sp.pos.x, y: sp.pos.y },
-          }));
-          activeParasiteSpots = activeParasiteSpots.map((p) => ({ x: 2 * px - p.x, y: p.y }));
-        }
-      }
 
       if (active && onParasiteStatsUpdate && time - lastStatsSyncRef.current > 150) {
         lastStatsSyncRef.current = time;
         onParasiteStatsUpdate(active.fish.getParasiteStats());
       }
 
-      if (onClientFishUpdate) {
+      // Throttled: this feeds React state, and re-rendering the overlay every
+      // frame is wasted work
+      if (onClientFishUpdate && time - lastInfoSyncRef.current > 150) {
+        lastInfoSyncRef.current = time;
         if (active) {
-          const metadata = getClientSpeciesMetadata(active.species);
+          const metadata = SPECIES[active.species];
           const state: ClientFishInfo['state'] =
             active.phase === 'leaving'
               ? 'exiting'
@@ -923,46 +440,9 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
         }
       }
 
-      // Auto-cleaner targets: body and fin parasites only - gill flaps and
-      // mouths are the player's work. If the player has been idle a while
-      // (true screensaver), the auto cleaners may finish everything.
-      const GATED_PARTS = ['operculum', 'upperTeeth', 'lowerTeeth'];
+      // Cleaner AI: what the on-duty and off-duty cleaners should work this frame
       const playerIdle = time - lastPointerTsRef.current > 25000;
-      let autoTargets: { x: number; y: number }[] = [];
-      if (active && active.phase !== 'leaving') {
-        if (playerIdle) {
-          autoTargets = activeParasiteSpots.slice();
-        } else {
-          const fpx = active.fish.pos.x;
-          autoTargets = active.fish.parasites
-            .filter((p) => !p.removed && !GATED_PARTS.includes(p.attachPart))
-            .map((p) => {
-              const lp = active.fish.getParasiteLocalPos(p);
-              const x = active.fish.pos.x + lp.x;
-              return { x: active.mirrored ? 2 * fpx - x : x, y: active.fish.pos.y + lp.y };
-            });
-        }
-        if (autoTargets.length > 3) {
-          const flank = cleaningSpots.find((sp) => /flank|torso|body/i.test(sp.id));
-          if (flank) autoTargets.push(flank.pos);
-        }
-      }
-
-      // The off-duty cleaner's beat: the waiting queue's body parasites
-      let queueTargets: { x: number; y: number }[] = [];
-      if (director && !playerIdle) {
-        for (const slot of director.slots) {
-          if (slot.role !== 'waiting' || slot.phase === 'leaving') continue;
-          const fpx = slot.fish.pos.x;
-          for (const p of slot.fish.parasites) {
-            if (p.removed || GATED_PARTS.includes(p.attachPart)) continue;
-            const lp = slot.fish.getParasiteLocalPos(p);
-            const x = slot.fish.pos.x + lp.x;
-            queueTargets.push({ x: slot.mirrored ? 2 * fpx - x : x, y: slot.fish.pos.y + lp.y });
-          }
-        }
-      }
-      if (queueTargets.length === 0) queueTargets = autoTargets;
+      const { autoTargets, queueTargets } = computeCleanerTargets({ director, active, playerIdle });
 
       // Nibble juice: a soft green pop for every parasite eaten
       if (active) {
@@ -977,7 +457,7 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
           const x0 = active.fish.pos.x + lp.x;
           const x = active.mirrored ? 2 * fpx - x0 : x0;
           const y = active.fish.pos.y + lp.y;
-          burstsRef.current.push({ x, y, age: 0, mini: true });
+          effects.addBurst(x, y, { mini: true });
           playNibbleSound();
         }
         eatSeenRef.current = { slot: active, ids: seen };
@@ -986,22 +466,25 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
       // Duty cycle: each auto cleaner works ~12s then drifts off ~8s,
       // offset so the two rarely rest at the same time
       const tSec = time / 1000;
-      const wrasseWorking = tSec % 20 < 12;
-      const gobiWorking = (tSec + 10) % 20 < 12;
+      const hogfishWorking = tSec % 20 < 12;
+      const gobyWorking = (tSec + 10) % 20 < 12;
 
       // --- 2. Sharknose Goby ---
-      if (gobiRef.current) {
-        const beat = wrasseSelected ? queueTargets : autoTargets;
-        gobiRef.current.setCleaningSpots(gobiWorking ? beat : []);
-        gobiRef.current.update(width, height, dt);
-        gobiRef.current.render(ctx);
+      if (gobyRef.current) {
+        const beat = hogfishSelected ? queueTargets : autoTargets;
+        gobyRef.current.setCleaningSpots(gobyWorking ? beat : []);
+        gobyRef.current.update(width, height, dt);
+        gobyRef.current.render(ctx);
       }
 
-      // --- 3. Cleaner Wrasse ---
+      // --- 3. Cleaner Hogfish ---
       if (fishRef.current) {
-        const beat = wrasseSelected ? autoTargets : queueTargets;
-        fishRef.current.setCleaningSpots(wrasseWorking ? beat : []);
+        const beat = hogfishSelected ? autoTargets : queueTargets;
+        fishRef.current.setCleaningSpots(hogfishWorking ? beat : []);
         fishRef.current.update(width, height, dt);
+      }
+
+      if (fishRef.current) {
         fishRef.current.render(ctx);
       }
 
@@ -1020,10 +503,10 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
   }, [
     dimensions,
     isRunning,
-    wrasseScale,
-    wrasseSpeed,
-    gobiScale,
-    gobiSpeed,
+    hogfishScale,
+    hogfishSpeed,
+    gobyScale,
+    gobySpeed,
     onParasiteStatsUpdate,
     onClientFishUpdate,
   ]);
@@ -1042,7 +525,7 @@ export const FishCanvas: React.FC<FishCanvasProps> = ({
     >
       <canvas
         ref={canvasRef}
-        id="cleaner-wrasse-canvas"
+        id="cleaner-hogfish-canvas"
         className="w-full h-full cursor-none"
         style={{ width: `${dimensions.width}px`, height: `${dimensions.height}px` }}
         onPointerDown={handlePointerDown}

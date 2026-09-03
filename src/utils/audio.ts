@@ -8,9 +8,13 @@
  * - Occasional gentle water chimes (sunlight glistening through the water column)
  * - Subtle occasional rising bubbles (soft ascending water droplets moving to the surface)
  * - Nibble and celebration sound effects with full global mute toggle
+ *
+ * Two background modes, Spa (ambient pads) and Carwash (a funk groove), plus Off.
  */
 
 export type SoundMode = 'off' | 'spa' | 'carwash';
+
+type TimerHandle = ReturnType<typeof setTimeout>;
 
 let audioCtx: AudioContext | null = null;
 let masterGain: GainNode | null = null;
@@ -24,16 +28,16 @@ let noteIndex = 0;
 
 // Ambient (Spa) loop handles & state
 let isAmbientRunning = false;
-let ambientTimer: NodeJS.Timeout | null = null;
-let bubbleTimer: NodeJS.Timeout | null = null;
-let chimeTimer: NodeJS.Timeout | null = null;
+let ambientTimer: TimerHandle | null = null;
+let bubbleTimer: TimerHandle | null = null;
+let chimeTimer: TimerHandle | null = null;
 let oceanNoiseSource: AudioBufferSourceNode | null = null;
 let oceanGainNode: GainNode | null = null;
-let oceanLfoTimer: NodeJS.Timeout | null = null;
+let oceanLfoTimer: TimerHandle | null = null;
 
 // Carwash groove handles & state
 let isCarwashRunning = false;
-let carwashSchedulerTimer: NodeJS.Timeout | null = null;
+let carwashSchedulerTimer: TimerHandle | null = null;
 let carwashNextStepTime = 0;
 let carwashStepIndex = 0;
 
@@ -120,13 +124,6 @@ export function getSoundMode(): SoundMode {
 }
 
 /**
- * Returns whether any sound is enabled
- */
-export function isSoundEnabled(): boolean {
-  return soundMode !== 'off';
-}
-
-/**
  * Changes sound mode ('off', 'spa', or 'carwash')
  */
 export function setSoundMode(mode: SoundMode) {
@@ -146,28 +143,10 @@ export function setSoundMode(mode: SoundMode) {
     masterGain.gain.linearRampToValueAtTime(mode !== 'off' ? 1.0 : 0.0, now + 0.12);
   }
 
-  if (mode === 'off') {
-    stopAmbientSoundscape();
-    stopCarwashGroove();
-  } else if (mode === 'spa') {
-    stopCarwashGroove();
-    startAmbientSoundscape();
-  } else if (mode === 'carwash') {
-    stopAmbientSoundscape();
-    startCarwashGroove();
-  }
-}
-
-/**
- * Legacy toggle compatibility
- */
-export function setSoundEnabled(enabled: boolean) {
-  setSoundMode(enabled ? 'spa' : 'off');
-}
-
-export function toggleSound(): boolean {
-  setSoundMode(soundMode === 'off' ? 'spa' : 'off');
-  return soundMode !== 'off';
+  stopAmbientSoundscape();
+  stopCarwashGroove();
+  if (mode === 'spa') startAmbientSoundscape();
+  else if (mode === 'carwash') startCarwashGroove();
 }
 
 /**
@@ -178,22 +157,23 @@ export function initAudioOnInteraction() {
   if (ctx && ctx.state === 'suspended') {
     ctx.resume().catch(() => {});
   }
-  if (soundMode === 'spa' && !isAmbientRunning) {
-    startAmbientSoundscape();
-  } else if (soundMode === 'carwash' && !isCarwashRunning) {
-    startCarwashGroove();
-  }
+  if (soundMode === 'spa' && !isAmbientRunning) startAmbientSoundscape();
+  else if (soundMode === 'carwash' && !isCarwashRunning) startCarwashGroove();
 }
 
-// Auto-attach interaction listeners to guarantee audio unlock in all modern browsers
-if (typeof window !== 'undefined') {
-  const unlockEvents = ['pointerdown', 'mousedown', 'touchstart', 'keydown', 'click'];
-  const unlockHandler = () => {
-    initAudioOnInteraction();
+/**
+ * Browsers only start audio after a user gesture. Call once at app start;
+ * it listens for the first interaction and unlocks playback. Returns a
+ * cleanup that removes the listeners.
+ */
+export function installAudioUnlock(): () => void {
+  if (typeof window === 'undefined') return () => {};
+  const unlockEvents = ['pointerdown', 'touchstart', 'keydown'] as const;
+  const unlockHandler = () => initAudioOnInteraction();
+  for (const evt of unlockEvents) window.addEventListener(evt, unlockHandler, { passive: true });
+  return () => {
+    for (const evt of unlockEvents) window.removeEventListener(evt, unlockHandler);
   };
-  unlockEvents.forEach((evt) => {
-    window.addEventListener(evt, unlockHandler, { passive: true });
-  });
 }
 
 /* =========================================================================
@@ -203,7 +183,7 @@ if (typeof window !== 'undefined') {
 /**
  * Starts the soothing ambient background music and reef elements (swell, bubbles, chimes)
  */
-export function startAmbientSoundscape() {
+function startAmbientSoundscape() {
   if (isAmbientRunning || soundMode !== 'spa') return;
   const ctx = getAudioContext();
   if (!ctx || !ambientGain) return;
@@ -226,7 +206,7 @@ export function startAmbientSoundscape() {
 /**
  * Halts all ambient background sounds and timers
  */
-export function stopAmbientSoundscape() {
+function stopAmbientSoundscape() {
   isAmbientRunning = false;
 
   if (ambientTimer) {
@@ -418,12 +398,12 @@ function scheduleNextBubbleCluster(ctx: AudioContext, dest: GainNode) {
   const delayMs = 7000 + Math.random() * 8000;
   bubbleTimer = setTimeout(() => {
     if (!isAmbientRunning) return;
-    playBubbleCluster(ctx, dest);
+    playBubbleCluster(dest);
     scheduleNextBubbleCluster(ctx, dest);
   }, delayMs);
 }
 
-function playBubbleCluster(ctx: AudioContext, dest: GainNode) {
+function playBubbleCluster(dest: GainNode) {
   // 2 to 4 bubbles per cluster
   const bubbleCount = 2 + Math.floor(Math.random() * 3);
   let currentDelay = 0;
@@ -568,7 +548,7 @@ const CARWASH_HORN_PATTERN: Record<number, { freq: number; dur: number }> = {
   60: { freq: 440.0, dur: 0.34 }, // A4
 };
 
-export function startCarwashGroove() {
+function startCarwashGroove() {
   if (isCarwashRunning || soundMode !== 'carwash') return;
   const ctx = getAudioContext();
   if (!ctx || !carwashGain) return;
@@ -583,7 +563,7 @@ export function startCarwashGroove() {
   }, 35);
 }
 
-export function stopCarwashGroove() {
+function stopCarwashGroove() {
   isCarwashRunning = false;
   if (carwashSchedulerTimer) {
     clearInterval(carwashSchedulerTimer);

@@ -1,5 +1,6 @@
-import { Vector2D, FishSegment, FishConfig } from '../types';
-import { dist, angleDiff, lerp, clamp, normalizeAngle } from '../utils/math';
+import { Vector2D, FishConfig } from '../types';
+import { angleDiff, clamp, normalizeAngle } from '../utils/math';
+import { CleanerFishBase, CleanerTuning } from './CleanerFishBase';
 
 interface FacetTriangle {
   p1: Vector2D;
@@ -9,422 +10,99 @@ interface FacetTriangle {
   strokeColor?: string;
 }
 
-export class SharknoseGoby {
-  public segments: FishSegment[] = [];
-  public headPos: Vector2D = { x: 0, y: 0 };
-  public heading: number = 0;
-  public speed: number = 0;
-  public targetSpeed: number = 2.6;
-  public swimPhase: number = 0;
-  public finPhase: number = 0;
+// Scaled relative to the Spanish hogfish (compact, slender goby proportions)
+const GOBY_CONFIG: FishConfig = {
+  scale: 0.85,
+  segmentCount: 14,
+  segmentLength: 7.2,
+  baseSpeed: 2.6,
+  maxSpeed: 5.2,
+  turnSpeed: 0.065,
+  waveFrequency: 0.24,
+  waveAmplitude: 4.5,
+};
 
-  public isRunning: boolean = true;
-  public behaviorMode: 'cruise' | 'dart' | 'dance' | 'hover' | 'follow' | 'clean' = 'cruise';
-  public modeTimer: number = 0;
-  public targetPoint: Vector2D = { x: 0, y: 0 };
-  public userPointer: Vector2D | null = null;
-  public isPointerActive: boolean = false;
-  public cleaningSpots: Vector2D[] = [];
+// Anatomical body radii for the slender, torpedo-shaped sharknose goby
+const GOBY_BODY_RADII: number[] = [
+  2.8,  // 0: Blunt conical snout
+  4.6,  // 1: Forehead / Eyes
+  6.2,  // 2: Opercular region / Pelvic disc
+  7.0,  // 3: 1st Dorsal fin anterior peak
+  6.8,  // 4: Mid torso
+  6.2,  // 5: 2nd Dorsal fin start
+  5.6,  // 6: Mid-posterior
+  4.8,  // 7: Anterior anal fin
+  4.0,  // 8: Posterior body
+  3.3,  // 9: Posterior body
+  2.6,  // 10: Caudal peduncle
+  2.0,  // 11: Narrow peduncle
+  1.5,  // 12: Tail base
+  1.0,  // 13: Caudal fin anchor
+];
 
-  // Scaled relative to the cleaner wrasse (compact, slender goby proportions)
-  public config: FishConfig = {
-    scale: 0.85,
-    segmentCount: 14,
-    segmentLength: 7.2,
-    baseSpeed: 2.6,
-    maxSpeed: 5.2,
-    turnSpeed: 0.065,
-    waveFrequency: 0.24,
-    waveAmplitude: 4.5,
-  };
+const GOBY_TUNING: CleanerTuning = {
+  segmentHeightRatio: 1.05,
+  refreshSegmentRadii: true,
+  mouthOffset: 8,
+  hitRadius: 38,
+  idleBobY: 0.1,
+  idleBobX: 0.05,
+  followRestSpeed: 0.7,
+  dartDuration: 65,
+  dartSpeedMin: 0.75,
+  dartSpeedRange: 0.25,
+  danceSpeed: 0.8,
+  cleanApproachMinSpeed: 1.1,
+  cleanInspectSpeed: 0.5,
+  spineMaxBend: 0.28,
+  spineWavePower: 1.3,
+  spineWaveLag: 0.46,
+  spineWaveScale: 0.036,
+  spineIdleWaveFactor: 0.16,
+};
 
-  // Anatomical body radii for the slender, torpedo-shaped sharknose goby
-  private bodyRadii: number[] = [
-    2.8,  // 0: Blunt conical snout
-    4.6,  // 1: Forehead / Eyes
-    6.2,  // 2: Opercular region / Pelvic disc
-    7.0,  // 3: 1st Dorsal fin anterior peak
-    6.8,  // 4: Mid torso
-    6.2,  // 5: 2nd Dorsal fin start
-    5.6,  // 6: Mid-posterior
-    4.8,  // 7: Anterior anal fin
-    4.0,  // 8: Posterior body
-    3.3,  // 9: Posterior body
-    2.6,  // 10: Caudal peduncle
-    2.0,  // 11: Narrow peduncle
-    1.5,  // 12: Tail base
-    1.0,  // 13: Caudal fin anchor
-  ];
-
-  private wanderNoise: number = 0;
-  private breathPhase: number = 0;
+export class SharknoseGoby extends CleanerFishBase {
+  /** The goby swims in from off-screen left; boundary repulsion and the
+   * autonomous mode roll stay off until it is inside the tank. */
   public state: 'entering' | 'active' = 'entering';
 
   constructor(canvasWidth: number, canvasHeight: number) {
-    // Start offscreen to the LEFT
-    const startX = -180;
-    const startY = canvasHeight * 0.45;
-    this.headPos = { x: startX, y: startY };
-    this.heading = 0; // Facing eastward into the screen
-    this.targetPoint = { x: canvasWidth * 0.35, y: canvasHeight * 0.45 };
-    this.speed = this.config.baseSpeed * 1.3;
+    // Start offscreen to the LEFT, facing eastward into the screen
+    super(GOBY_CONFIG, GOBY_BODY_RADII, GOBY_TUNING, {
+      x: -180,
+      y: canvasHeight * 0.45,
+      heading: 0,
+      speed: GOBY_CONFIG.baseSpeed * 1.3,
+      targetPoint: { x: canvasWidth * 0.35, y: canvasHeight * 0.45 },
+    });
+  }
 
-    // Initialize spine segments trailing behind the initial heading
-    for (let i = 0; i < this.config.segmentCount; i++) {
-      const segLen = this.config.segmentLength * this.config.scale;
-      const x = startX - Math.cos(this.heading) * (i * segLen);
-      const y = startY - Math.sin(this.heading) * (i * segLen);
-      const r = (this.bodyRadii[i] || 2.0) * this.config.scale;
-      this.segments.push({
-        pos: { x, y },
-        prevPos: { x, y },
-        angle: this.heading,
-        width: r,
-        height: r * 1.05,
-      });
+  protected resetPosition(width: number, height: number): Vector2D {
+    return { x: width * 0.25, y: height * 0.5 };
+  }
+
+  protected onUpdateStart(): void {
+    if (this.state === 'entering' && this.headPos.x > 80) {
+      this.state = 'active';
     }
   }
 
-  public setPointer(pos: Vector2D | null, active: boolean = false) {
-    this.userPointer = pos;
-    this.isPointerActive = active;
+  /** Entry glide: steer towards a point a third of the way across the tank. */
+  protected handleSpecialBehavior(width: number, height: number, dt: number): boolean {
+    if (this.state !== 'entering') return false;
+
+    this.targetSpeed = this.config.baseSpeed * 0.95;
+    const targetY = height * 0.48;
+    const toTargetAngle = Math.atan2(targetY - this.headPos.y, width * 0.35 - this.headPos.x);
+    const diff = angleDiff(toTargetAngle, this.heading);
+    const turnStep = clamp(diff * 0.04, -this.config.turnSpeed, this.config.turnSpeed);
+    this.heading = normalizeAngle(this.heading + turnStep * dt);
+    return true;
   }
 
-  public setRunning(running: boolean) {
-    this.isRunning = running;
-  }
-
-  public inviteDanceTimer: number = 0;
-
-  public triggerInviteDance(durationSec: number = 2.0) {
-    this.inviteDanceTimer = durationSec * 60;
-  }
-
-  public stunTimer: number = 0;
-  private spitDir: { x: number; y: number } = { x: 0, y: 0 };
-
-  /** Knockback when a client clamps shut on the cleaner - spat out and
-   * briefly out of control, exactly like getting chomped deserves. */
-  public spit(from: { x: number; y: number }) {
-    const dx = this.headPos.x - from.x;
-    const dy = this.headPos.y - from.y;
-    const d = Math.hypot(dx, dy) || 1;
-    this.spitDir = { x: dx / d, y: dy / d };
-    this.stunTimer = 48; // ~0.8s in frame units
-  }
-
-  public setCleaningSpots(spots: Vector2D[]) {
-    this.cleaningSpots = spots;
-  }
-
-  public getMouthPos(): Vector2D {
-    const s = this.config.scale;
-    const angle = this.segments.length > 0 ? this.segments[0].angle : this.heading;
-    const base = this.segments.length > 0 ? this.segments[0].pos : this.headPos;
-    return {
-      x: base.x + Math.cos(angle) * (8 * s),
-      y: base.y + Math.sin(angle) * (8 * s),
-    };
-  }
-
-  public hitTest(pos: Vector2D): boolean {
-    const hitRadius = 38 * this.config.scale;
-    if (dist(pos, this.headPos) < hitRadius) return true;
-    for (const seg of this.segments) {
-      if (dist(pos, seg.pos) < hitRadius) return true;
-    }
-    return false;
-  }
-
-  public update(width: number, height: number, dt: number = 1) {
-    if (isNaN(this.headPos.x) || isNaN(this.headPos.y) || isNaN(this.heading)) {
-      this.headPos = { x: width * 0.25, y: height * 0.5 };
-      this.heading = 0;
-      this.speed = this.config.baseSpeed;
-    }
-
-    const safeDt = clamp(dt, 0.2, 2.0);
-    this.modeTimer += safeDt;
-    this.breathPhase += 0.04 * safeDt;
-
-    if (this.state === 'entering') {
-      if (this.headPos.x > 80) {
-        this.state = 'active';
-      }
-    }
-
-    if (!this.isRunning) {
-      this.targetSpeed = 0;
-      this.speed = lerp(this.speed, 0, 0.06 * safeDt);
-      this.finPhase += 0.04 * safeDt;
-      this.swimPhase += 0.02 * safeDt;
-
-      this.headPos.y += Math.sin(this.breathPhase * 0.4) * 0.1 * safeDt;
-      this.headPos.x += Math.cos(this.breathPhase * 0.25) * 0.05 * safeDt;
-
-      this.updateSpine(safeDt);
-      return;
-    }
-
-    if (this.stunTimer > 0) {
-      // Spat out: tumble away from the clamped jaw, tail thrashing
-      this.stunTimer -= safeDt;
-      // Tumble: flung heading plus a wobble as it cartwheels away
-      this.heading =
-        Math.atan2(this.spitDir.y, this.spitDir.x) + Math.sin(this.stunTimer * 0.55) * 0.7;
-      const kick = 9 * (this.stunTimer / 48 + 0.25);
-      this.headPos.x += this.spitDir.x * kick * safeDt;
-      this.headPos.y += this.spitDir.y * kick * safeDt;
-      this.swimPhase += 0.35 * safeDt;
-      this.finPhase += 0.5 * safeDt;
-      this.applyBoundaryRepulsion(width, height, safeDt);
-      this.updateSpine(safeDt);
-      return;
-    }
-
-    if (this.inviteDanceTimer > 0) {
-      this.inviteDanceTimer -= safeDt;
-      this.behaviorMode = 'dance';
-      this.targetSpeed = 0.5;
-      // Signature Goby invitation dance: rapid head bobbing, tail shimmer, and pectoral flutter
-      const danceWiggle = Math.sin(this.swimPhase * 3.5) * 0.16;
-      this.heading = normalizeAngle(this.heading + danceWiggle * safeDt);
-      this.headPos.y += Math.sin(this.swimPhase * 2.8) * 1.8 * safeDt;
-      this.finPhase += 0.85 * safeDt;
-      this.swimPhase += 0.7 * safeDt;
-      this.speed = lerp(this.speed, this.targetSpeed, 0.1 * safeDt);
-      this.applyBoundaryRepulsion(width, height, safeDt);
-      this.updateSpine(safeDt);
-      return;
-    }
-
-    this.handleBehavior(width, height, safeDt);
-
-    this.speed = lerp(this.speed, this.targetSpeed, 0.05 * safeDt);
-
-    const speedRatio = Math.max(0.25, this.speed / this.config.baseSpeed);
-    this.swimPhase += this.config.waveFrequency * speedRatio * safeDt;
-    this.finPhase += (0.18 + speedRatio * 0.32) * safeDt;
-
-    const moveDist = this.speed * safeDt;
-    this.headPos.x += Math.cos(this.heading) * moveDist;
-    this.headPos.y += Math.sin(this.heading) * moveDist;
-
-    this.applyBoundaryRepulsion(width, height, safeDt);
-    this.updateSpine(safeDt);
-  }
-
-  private handleBehavior(width: number, height: number, dt: number) {
-    if (this.isPointerActive && this.userPointer) {
-      this.behaviorMode = 'follow';
-      const d = dist(this.headPos, this.userPointer);
-      if (d > 35) {
-        const targetAngle = Math.atan2(
-          this.userPointer.y - this.headPos.y,
-          this.userPointer.x - this.headPos.x
-        );
-        const diff = angleDiff(targetAngle, this.heading);
-        const maxTurn = this.config.turnSpeed * 1.4;
-        const turnStep = clamp(diff * 0.08, -maxTurn, maxTurn);
-        this.heading = normalizeAngle(this.heading + turnStep * dt);
-        this.targetSpeed = clamp(d * 0.04, this.config.baseSpeed * 0.8, this.config.maxSpeed);
-      } else {
-        this.targetSpeed = 0.7;
-        const wiggle = Math.sin(this.swimPhase * 1.2) * 0.015;
-        this.heading = normalizeAngle(this.heading + wiggle * dt);
-      }
-      return;
-    }
-
-    if (this.state === 'entering') {
-      this.targetSpeed = this.config.baseSpeed * 0.95;
-      const targetY = height * 0.48;
-      const toTargetAngle = Math.atan2(targetY - this.headPos.y, width * 0.35 - this.headPos.x);
-      const diff = angleDiff(toTargetAngle, this.heading);
-      const turnStep = clamp(diff * 0.04, -this.config.turnSpeed, this.config.turnSpeed);
-      this.heading = normalizeAngle(this.heading + turnStep * dt);
-      return;
-    }
-
-    const modeDuration = this.behaviorMode === 'dart' ? 65 : this.behaviorMode === 'clean' ? 260 : 220 + Math.random() * 180;
-    if (this.modeTimer > modeDuration) {
-      this.modeTimer = 0;
-      const roll = Math.random();
-
-      // Cleaner goby behavior: visits client fish cleaning spots frequently
-      if (this.cleaningSpots.length > 0 && roll < 0.38) {
-        this.behaviorMode = 'clean';
-        const spot = this.cleaningSpots[Math.floor(Math.random() * this.cleaningSpots.length)];
-        this.targetPoint = {
-          x: spot.x + (Math.random() - 0.5) * 20,
-          y: spot.y + (Math.random() - 0.5) * 20,
-        };
-        this.targetSpeed = this.config.baseSpeed * 0.9;
-      } else if (roll < 0.65) {
-        this.behaviorMode = 'cruise';
-        this.targetSpeed = this.config.baseSpeed * (0.85 + Math.random() * 0.3);
-        const pad = 140;
-        this.targetPoint = {
-          x: pad + Math.random() * Math.max(100, width - pad * 2),
-          y: pad + Math.random() * Math.max(100, height - pad * 2),
-        };
-      } else if (roll < 0.82) {
-        this.behaviorMode = 'dart';
-        this.targetSpeed = this.config.maxSpeed * (0.75 + Math.random() * 0.25);
-        const pad = 140;
-        this.targetPoint = {
-          x: pad + Math.random() * Math.max(100, width - pad * 2),
-          y: pad + Math.random() * Math.max(100, height - pad * 2),
-        };
-      } else if (roll < 0.93) {
-        this.behaviorMode = 'dance';
-        this.targetSpeed = 0.8;
-      } else {
-        this.behaviorMode = 'hover';
-        this.targetSpeed = 0.4;
-      }
-    }
-
-    const maxTurnRate = this.config.turnSpeed;
-
-    switch (this.behaviorMode) {
-      case 'clean': {
-        const d = dist(this.headPos, this.targetPoint);
-        const toTargetAngle = Math.atan2(
-          this.targetPoint.y - this.headPos.y,
-          this.targetPoint.x - this.headPos.x
-        );
-        const diff = angleDiff(toTargetAngle, this.heading);
-
-        if (d > 35) {
-          const turnStep = clamp(diff * 0.05, -maxTurnRate * 1.1, maxTurnRate * 1.1);
-          this.heading = normalizeAngle(this.heading + turnStep * dt);
-          this.targetSpeed = clamp(d * 0.035, 1.1, this.config.baseSpeed);
-        } else {
-          // Goby inspection wiggle near client
-          this.targetSpeed = 0.5;
-          const cleaningDance = Math.sin(this.swimPhase * 1.8) * 0.035;
-          this.heading = normalizeAngle(this.heading + cleaningDance * dt);
-        }
-        break;
-      }
-
-      case 'cruise': {
-        this.wanderNoise += (Math.random() - 0.5) * 0.08 * dt;
-        this.wanderNoise = clamp(this.wanderNoise, -0.4, 0.4);
-
-        const toTargetAngle = Math.atan2(
-          this.targetPoint.y - this.headPos.y,
-          this.targetPoint.x - this.headPos.x
-        );
-        const diff = angleDiff(toTargetAngle, this.heading);
-        const desiredTurn = diff * 0.03 + this.wanderNoise * 0.02;
-        const turnStep = clamp(desiredTurn, -maxTurnRate, maxTurnRate);
-        this.heading = normalizeAngle(this.heading + turnStep * dt);
-
-        if (dist(this.headPos, this.targetPoint) < 80) {
-          this.modeTimer = 300;
-        }
-        break;
-      }
-
-      case 'dart': {
-        const toTargetAngle = Math.atan2(
-          this.targetPoint.y - this.headPos.y,
-          this.targetPoint.x - this.headPos.x
-        );
-        const diff = angleDiff(toTargetAngle, this.heading);
-        const turnStep = clamp(diff * 0.06, -maxTurnRate * 1.2, maxTurnRate * 1.2);
-        this.heading = normalizeAngle(this.heading + turnStep * dt);
-
-        if (this.modeTimer > 40) {
-          this.targetSpeed = lerp(this.targetSpeed, this.config.baseSpeed, 0.06 * dt);
-        }
-        break;
-      }
-
-      case 'dance': {
-        const danceWiggle = Math.sin(this.swimPhase * 1.4) * 0.025;
-        this.heading = normalizeAngle(this.heading + danceWiggle * dt);
-        break;
-      }
-
-      case 'hover': {
-        const gentleDrift = Math.sin(this.breathPhase * 0.8) * 0.008;
-        this.heading = normalizeAngle(this.heading + gentleDrift * dt);
-        break;
-      }
-    }
-  }
-
-  private applyBoundaryRepulsion(width: number, height: number, dt: number) {
+  protected applyBoundaryRepulsion(width: number, height: number, dt: number) {
     if (this.state === 'entering') return;
-
-    const margin = 110;
-    let pushX = 0;
-    let pushY = 0;
-
-    if (this.headPos.x < margin) pushX = (margin - this.headPos.x) / margin;
-    else if (this.headPos.x > width - margin) pushX = -(this.headPos.x - (width - margin)) / margin;
-
-    if (this.headPos.y < margin) pushY = (margin - this.headPos.y) / margin;
-    else if (this.headPos.y > height - margin) pushY = -(this.headPos.y - (height - margin)) / margin;
-
-    const hardPad = 30;
-    this.headPos.x = clamp(this.headPos.x, hardPad, width - hardPad);
-    this.headPos.y = clamp(this.headPos.y, hardPad, height - hardPad);
-
-    if (pushX !== 0 || pushY !== 0) {
-      const avoidAngle = Math.atan2(pushY, pushX);
-      const diff = angleDiff(avoidAngle, this.heading);
-      const repulsionStrength = Math.min(1.0, Math.hypot(pushX, pushY));
-      const turnStep = clamp(diff * 0.08 * repulsionStrength, -0.06, 0.06);
-      this.heading = normalizeAngle(this.heading + turnStep * dt);
-    }
-  }
-
-  private updateSpine(dt: number) {
-    if (this.segments.length === 0) return;
-
-    this.segments[0].pos.x = this.headPos.x;
-    this.segments[0].pos.y = this.headPos.y;
-    this.segments[0].angle = this.heading;
-    this.segments[0].width = (this.bodyRadii[0] || 2.8) * this.config.scale;
-    this.segments[0].height = this.segments[0].width * 1.05;
-
-    const baseSegLen = this.config.segmentLength * this.config.scale;
-
-    for (let i = 1; i < this.segments.length; i++) {
-      const prev = this.segments[i - 1];
-      const curr = this.segments[i];
-
-      curr.prevPos = { ...curr.pos };
-
-      const dx = curr.pos.x - prev.pos.x;
-      const dy = curr.pos.y - prev.pos.y;
-      let currentDir = Math.atan2(dy, dx);
-      if (isNaN(currentDir)) currentDir = prev.angle + Math.PI;
-
-      const naturalTrailingAngle = prev.angle + Math.PI;
-      const deviation = angleDiff(currentDir, naturalTrailingAngle);
-
-      const maxBend = 0.28;
-      const clampedDeviation = clamp(deviation, -maxBend, maxBend);
-      const jointAngle = naturalTrailingAngle + clampedDeviation;
-
-      const waveProgress = i / (this.segments.length - 1);
-      const waveAmpFactor = Math.pow(waveProgress, 1.3);
-      const waveFlex = Math.sin(this.swimPhase - i * 0.46) * (this.config.waveAmplitude * 0.036) * waveAmpFactor;
-      const effectiveWave = this.speed > 0.08 ? waveFlex : waveFlex * 0.16;
-
-      const finalAngle = jointAngle + effectiveWave;
-
-      curr.pos.x = prev.pos.x + Math.cos(finalAngle) * baseSegLen;
-      curr.pos.y = prev.pos.y + Math.sin(finalAngle) * baseSegLen;
-      curr.angle = finalAngle - Math.PI;
-      curr.width = (this.bodyRadii[i] || 2.0) * this.config.scale;
-      curr.height = curr.width * 1.05;
-    }
+    super.applyBoundaryRepulsion(width, height, dt);
   }
 
   public render(ctx: CanvasRenderingContext2D) {
@@ -703,7 +381,6 @@ export class SharknoseGoby {
   private renderCaudalFin(ctx: CanvasRenderingContext2D) {
     const s = this.config.scale;
     const lastSeg = this.segments[this.segments.length - 1];
-    const prevSeg = this.segments[this.segments.length - 2];
     const tailAngle = lastSeg.angle;
     const normAngle = tailAngle + Math.PI / 2;
     const flutter = Math.sin(this.finPhase) * 2.2;

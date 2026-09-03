@@ -1,415 +1,72 @@
-import { Vector2D, FishSegment, FishConfig } from '../types';
-import { dist, angleDiff, lerp, clamp, normalizeAngle } from '../utils/math';
+import { Vector2D, FishConfig } from '../types';
+import { CleanerFishBase, CleanerTuning } from './CleanerFishBase';
 
-interface FacetTriangle {
-  p1: Vector2D;
-  p2: Vector2D;
-  p3: Vector2D;
-  color: string;
-  strokeColor?: string;
-}
+const HOGFISH_CONFIG: FishConfig = {
+  scale: 1.25,
+  segmentCount: 16,
+  segmentLength: 9.5,
+  baseSpeed: 2.8,
+  maxSpeed: 5.5,
+  turnSpeed: 0.055,
+  waveFrequency: 0.20,
+  waveAmplitude: 5.0,
+};
 
-export class CleanerWrasse {
-  public segments: FishSegment[] = [];
-  public headPos: Vector2D = { x: 0, y: 0 };
-  public heading: number = 0;
-  public speed: number = 0;
-  public targetSpeed: number = 2.8;
-  public swimPhase: number = 0;
-  public finPhase: number = 0;
+// Anatomical body half-widths matching the juvenile Spanish hogfish (Bodianus rufus)
+// Streamlined profile with pointed acute snout, gentle dorsal nape, and stout caudal peduncle
+const HOGFISH_BODY_RADII: number[] = [
+  2.7,  // 0: Pointed snout tip
+  5.2,  // 1: Forehead / Eye
+  7.6,  // 2: Nape / Opercular margin
+  9.2,  // 3: Pectoral base / 1st dorsal spine origin
+  9.8,  // 4: Anterior dorsal ridge (moderate, sleek arch)
+  9.5,  // 5: Mid-body
+  8.8,  // 6: Mid-posterior transition
+  7.8,  // 7: Anterior anal fin
+  6.6,  // 8: Rear torso (yellow flank)
+  5.5,  // 9: Rear body
+  4.5,  // 10: Peduncle start
+  3.6,  // 11: Caudal peduncle
+  2.8,  // 12: Narrow peduncle
+  2.2,  // 13: Tail base
+  1.7,  // 14: Caudal fin root
+  1.2,  // 15: Caudal tip anchor
+];
 
-  public isRunning: boolean = true;
-  public behaviorMode: 'cruise' | 'dart' | 'dance' | 'hover' | 'follow' | 'clean' = 'cruise';
-  public modeTimer: number = 0;
-  public targetPoint: Vector2D = { x: 0, y: 0 };
-  public userPointer: Vector2D | null = null;
-  public isPointerActive: boolean = false;
-  public cleaningSpots: Vector2D[] = [];
+const HOGFISH_TUNING: CleanerTuning = {
+  segmentHeightRatio: 1.1,
+  refreshSegmentRadii: false,
+  mouthOffset: 14,
+  hitRadius: 45,
+  idleBobY: 0.12,
+  idleBobX: 0.06,
+  followRestSpeed: 0.8,
+  dartDuration: 70,
+  dartSpeedMin: 0.8,
+  dartSpeedRange: 0.2,
+  danceSpeed: 0.9,
+  cleanApproachMinSpeed: 1.2,
+  cleanInspectSpeed: 0.6,
+  spineMaxBend: 0.26,
+  spineWavePower: 1.35,
+  spineWaveLag: 0.44,
+  spineWaveScale: 0.038,
+  spineIdleWaveFactor: 0.18,
+};
 
-  public config: FishConfig = {
-    scale: 1.25,
-    segmentCount: 16,
-    segmentLength: 9.5,
-    baseSpeed: 2.8,
-    maxSpeed: 5.5,
-    turnSpeed: 0.055,
-    waveFrequency: 0.20,
-    waveAmplitude: 5.0,
-  };
-
-  // Anatomical body half-widths matching the juvenile Spanish hogfish (Bodianus rufus)
-  // Streamlined profile with pointed acute snout, gentle dorsal nape, and stout caudal peduncle
-  private bodyRadii: number[] = [
-    2.7,  // 0: Pointed snout tip
-    5.2,  // 1: Forehead / Eye
-    7.6,  // 2: Nape / Opercular margin
-    9.2,  // 3: Pectoral base / 1st dorsal spine origin
-    9.8,  // 4: Anterior dorsal ridge (moderate, sleek arch)
-    9.5,  // 5: Mid-body
-    8.8,  // 6: Mid-posterior transition
-    7.8,  // 7: Anterior anal fin
-    6.6,  // 8: Rear torso (yellow flank)
-    5.5,  // 9: Rear body
-    4.5,  // 10: Peduncle start
-    3.6,  // 11: Caudal peduncle
-    2.8,  // 12: Narrow peduncle
-    2.2,  // 13: Tail base
-    1.7,  // 14: Caudal fin root
-    1.2,  // 15: Caudal tip anchor
-  ];
-
-  // Natural wandering parameters
-  private wanderNoise: number = 0;
-  private breathPhase: number = 0;
-
+export class SpanishHogfish extends CleanerFishBase {
   constructor(startX: number, startY: number) {
-    this.headPos = { x: startX, y: startY };
-    this.targetPoint = { x: startX + 150, y: startY };
-    this.heading = Math.random() * Math.PI * 2;
-    this.speed = this.config.baseSpeed;
-
-    // Initialize spine segments trailing behind the initial heading
-    for (let i = 0; i < this.config.segmentCount; i++) {
-      const segLen = this.config.segmentLength * this.config.scale;
-      const x = startX - Math.cos(this.heading) * (i * segLen);
-      const y = startY - Math.sin(this.heading) * (i * segLen);
-      const r = (this.bodyRadii[i] || 2.5) * this.config.scale;
-      this.segments.push({
-        pos: { x, y },
-        prevPos: { x, y },
-        angle: this.heading,
-        width: r,
-        height: r * 1.1,
-      });
-    }
+    super(HOGFISH_CONFIG, HOGFISH_BODY_RADII, HOGFISH_TUNING, {
+      x: startX,
+      y: startY,
+      heading: Math.random() * Math.PI * 2,
+      speed: HOGFISH_CONFIG.baseSpeed,
+      targetPoint: { x: startX + 150, y: startY },
+    });
   }
 
-  public stunTimer: number = 0;
-  private spitDir: { x: number; y: number } = { x: 0, y: 0 };
-
-  /** Knockback when a client clamps shut on the cleaner - spat out and
-   * briefly out of control, exactly like getting chomped deserves. */
-  public spit(from: { x: number; y: number }) {
-    const dx = this.headPos.x - from.x;
-    const dy = this.headPos.y - from.y;
-    const d = Math.hypot(dx, dy) || 1;
-    this.spitDir = { x: dx / d, y: dy / d };
-    this.stunTimer = 48; // ~0.8s in frame units
-  }
-
-  public setCleaningSpots(spots: Vector2D[]) {
-    this.cleaningSpots = spots;
-  }
-
-  public getMouthPos(): Vector2D {
-    const s = this.config.scale;
-    const angle = this.segments.length > 0 ? this.segments[0].angle : this.heading;
-    const base = this.segments.length > 0 ? this.segments[0].pos : this.headPos;
-    return {
-      x: base.x + Math.cos(angle) * (14 * s),
-      y: base.y + Math.sin(angle) * (14 * s),
-    };
-  }
-
-  public setPointer(pos: Vector2D | null, active: boolean = false) {
-    this.userPointer = pos;
-    this.isPointerActive = active;
-  }
-
-  public inviteDanceTimer: number = 0;
-
-  public triggerInviteDance(durationSec: number = 2.0) {
-    this.inviteDanceTimer = durationSec * 60;
-  }
-
-  public toggleRunning(): boolean {
-    this.isRunning = !this.isRunning;
-    return this.isRunning;
-  }
-
-  public setRunning(running: boolean) {
-    this.isRunning = running;
-  }
-
-  public hitTest(pos: Vector2D): boolean {
-    const hitRadius = 45 * this.config.scale;
-    if (dist(pos, this.headPos) < hitRadius) return true;
-    for (const seg of this.segments) {
-      if (dist(pos, seg.pos) < hitRadius) return true;
-    }
-    return false;
-  }
-
-  public update(width: number, height: number, dt: number = 1) {
-    if (isNaN(this.headPos.x) || isNaN(this.headPos.y) || isNaN(this.heading)) {
-      this.headPos = { x: width / 2, y: height / 2 };
-      this.heading = 0;
-      this.speed = this.config.baseSpeed;
-    }
-
-    const safeDt = clamp(dt, 0.2, 2.0);
-    this.modeTimer += safeDt;
-    this.breathPhase += 0.04 * safeDt;
-
-    if (!this.isRunning) {
-      this.targetSpeed = 0;
-      this.speed = lerp(this.speed, 0, 0.06 * safeDt);
-      this.finPhase += 0.04 * safeDt;
-      this.swimPhase += 0.02 * safeDt;
-
-      this.headPos.y += Math.sin(this.breathPhase * 0.4) * 0.12 * safeDt;
-      this.headPos.x += Math.cos(this.breathPhase * 0.25) * 0.06 * safeDt;
-
-      this.updateSpine(safeDt);
-      return;
-    }
-
-    if (this.stunTimer > 0) {
-      // Spat out: tumble away from the clamped jaw, tail thrashing
-      this.stunTimer -= safeDt;
-      // Tumble: flung heading plus a wobble as it cartwheels away
-      this.heading =
-        Math.atan2(this.spitDir.y, this.spitDir.x) + Math.sin(this.stunTimer * 0.55) * 0.7;
-      const kick = 9 * (this.stunTimer / 48 + 0.25);
-      this.headPos.x += this.spitDir.x * kick * safeDt;
-      this.headPos.y += this.spitDir.y * kick * safeDt;
-      this.swimPhase += 0.35 * safeDt;
-      this.finPhase += 0.5 * safeDt;
-      this.applyBoundaryRepulsion(width, height, safeDt);
-      this.updateSpine(safeDt);
-      return;
-    }
-
-    if (this.inviteDanceTimer > 0) {
-      this.inviteDanceTimer -= safeDt;
-      this.behaviorMode = 'dance';
-      this.targetSpeed = 0.5;
-      // Fast, distinct invitation dance with rapid fin flutter and sinusoidal body sway
-      const danceWiggle = Math.sin(this.swimPhase * 3.5) * 0.16;
-      this.heading = normalizeAngle(this.heading + danceWiggle * safeDt);
-      this.headPos.y += Math.sin(this.swimPhase * 2.8) * 1.8 * safeDt;
-      this.finPhase += 0.85 * safeDt;
-      this.swimPhase += 0.7 * safeDt;
-      this.speed = lerp(this.speed, this.targetSpeed, 0.1 * safeDt);
-      this.applyBoundaryRepulsion(width, height, safeDt);
-      this.updateSpine(safeDt);
-      return;
-    }
-
-    this.handleBehavior(width, height, safeDt);
-
-    this.speed = lerp(this.speed, this.targetSpeed, 0.05 * safeDt);
-
-    const speedRatio = Math.max(0.25, this.speed / this.config.baseSpeed);
-    this.swimPhase += this.config.waveFrequency * speedRatio * safeDt;
-    this.finPhase += (0.18 + speedRatio * 0.32) * safeDt;
-
-    const moveDist = this.speed * safeDt;
-    this.headPos.x += Math.cos(this.heading) * moveDist;
-    this.headPos.y += Math.sin(this.heading) * moveDist;
-
-    this.applyBoundaryRepulsion(width, height, safeDt);
-    this.updateSpine(safeDt);
-  }
-
-  private handleBehavior(width: number, height: number, dt: number) {
-    if (this.isPointerActive && this.userPointer) {
-      this.behaviorMode = 'follow';
-      const d = dist(this.headPos, this.userPointer);
-      if (d > 35) {
-        const targetAngle = Math.atan2(
-          this.userPointer.y - this.headPos.y,
-          this.userPointer.x - this.headPos.x
-        );
-        const diff = angleDiff(targetAngle, this.heading);
-        const maxTurn = this.config.turnSpeed * 1.4;
-        const turnStep = clamp(diff * 0.08, -maxTurn, maxTurn);
-        this.heading = normalizeAngle(this.heading + turnStep * dt);
-        this.targetSpeed = clamp(d * 0.04, this.config.baseSpeed * 0.8, this.config.maxSpeed);
-      } else {
-        this.targetSpeed = 0.8;
-        const wiggle = Math.sin(this.swimPhase * 1.2) * 0.015;
-        this.heading = normalizeAngle(this.heading + wiggle * dt);
-      }
-      return;
-    }
-
-    const modeDuration = this.behaviorMode === 'dart' ? 70 : this.behaviorMode === 'clean' ? 260 : 220 + Math.random() * 180;
-    if (this.modeTimer > modeDuration) {
-      this.modeTimer = 0;
-      const roll = Math.random();
-
-      // If grouper cleaning spots exist, high chance to visit the grouper's mouth or gills!
-      if (this.cleaningSpots.length > 0 && roll < 0.38) {
-        this.behaviorMode = 'clean';
-        const spot = this.cleaningSpots[Math.floor(Math.random() * this.cleaningSpots.length)];
-        this.targetPoint = {
-          x: spot.x + (Math.random() - 0.5) * 20,
-          y: spot.y + (Math.random() - 0.5) * 20,
-        };
-        this.targetSpeed = this.config.baseSpeed * 0.9;
-      } else if (roll < 0.65) {
-        this.behaviorMode = 'cruise';
-        this.targetSpeed = this.config.baseSpeed * (0.85 + Math.random() * 0.3);
-        const pad = 140;
-        this.targetPoint = {
-          x: pad + Math.random() * Math.max(100, width - pad * 2),
-          y: pad + Math.random() * Math.max(100, height - pad * 2),
-        };
-      } else if (roll < 0.82) {
-        this.behaviorMode = 'dart';
-        this.targetSpeed = this.config.maxSpeed * (0.8 + Math.random() * 0.2);
-        const pad = 140;
-        this.targetPoint = {
-          x: pad + Math.random() * Math.max(100, width - pad * 2),
-          y: pad + Math.random() * Math.max(100, height - pad * 2),
-        };
-      } else if (roll < 0.93) {
-        this.behaviorMode = 'dance';
-        this.targetSpeed = 0.9;
-      } else {
-        this.behaviorMode = 'hover';
-        this.targetSpeed = 0.4;
-      }
-    }
-
-    const maxTurnRate = this.config.turnSpeed;
-
-    switch (this.behaviorMode) {
-      case 'clean': {
-        const d = dist(this.headPos, this.targetPoint);
-        const toTargetAngle = Math.atan2(
-          this.targetPoint.y - this.headPos.y,
-          this.targetPoint.x - this.headPos.x
-        );
-        const diff = angleDiff(toTargetAngle, this.heading);
-
-        if (d > 35) {
-          // Approach the grouper's mouth or gill
-          const turnStep = clamp(diff * 0.05, -maxTurnRate * 1.1, maxTurnRate * 1.1);
-          this.heading = normalizeAngle(this.heading + turnStep * dt);
-          this.targetSpeed = clamp(d * 0.035, 1.2, this.config.baseSpeed);
-        } else {
-          // At the cleaning spot: perform characteristic inspection dance & pecks
-          this.targetSpeed = 0.6;
-          const cleaningDance = Math.sin(this.swimPhase * 1.8) * 0.035;
-          this.heading = normalizeAngle(this.heading + cleaningDance * dt);
-        }
-        break;
-      }
-
-      case 'cruise': {
-        this.wanderNoise += (Math.random() - 0.5) * 0.08 * dt;
-        this.wanderNoise = clamp(this.wanderNoise, -0.4, 0.4);
-
-        const toTargetAngle = Math.atan2(
-          this.targetPoint.y - this.headPos.y,
-          this.targetPoint.x - this.headPos.x
-        );
-        const diff = angleDiff(toTargetAngle, this.heading);
-        const desiredTurn = diff * 0.03 + this.wanderNoise * 0.02;
-        const turnStep = clamp(desiredTurn, -maxTurnRate, maxTurnRate);
-        this.heading = normalizeAngle(this.heading + turnStep * dt);
-
-        if (dist(this.headPos, this.targetPoint) < 80) {
-          this.modeTimer = 300;
-        }
-        break;
-      }
-
-      case 'dart': {
-        const toTargetAngle = Math.atan2(
-          this.targetPoint.y - this.headPos.y,
-          this.targetPoint.x - this.headPos.x
-        );
-        const diff = angleDiff(toTargetAngle, this.heading);
-        const turnStep = clamp(diff * 0.06, -maxTurnRate * 1.2, maxTurnRate * 1.2);
-        this.heading = normalizeAngle(this.heading + turnStep * dt);
-
-        if (this.modeTimer > 40) {
-          this.targetSpeed = lerp(this.targetSpeed, this.config.baseSpeed, 0.06 * dt);
-        }
-        break;
-      }
-
-      case 'dance': {
-        const danceWiggle = Math.sin(this.swimPhase * 1.4) * 0.025;
-        this.heading = normalizeAngle(this.heading + danceWiggle * dt);
-        break;
-      }
-
-      case 'hover': {
-        const gentleDrift = Math.sin(this.breathPhase * 0.8) * 0.008;
-        this.heading = normalizeAngle(this.heading + gentleDrift * dt);
-        break;
-      }
-    }
-  }
-
-  private applyBoundaryRepulsion(width: number, height: number, dt: number) {
-    const margin = 110;
-    let pushX = 0;
-    let pushY = 0;
-
-    if (this.headPos.x < margin) {
-      pushX = (margin - this.headPos.x) / margin;
-    } else if (this.headPos.x > width - margin) {
-      pushX = -(this.headPos.x - (width - margin)) / margin;
-    }
-
-    if (this.headPos.y < margin) {
-      pushY = (margin - this.headPos.y) / margin;
-    } else if (this.headPos.y > height - margin) {
-      pushY = -(this.headPos.y - (height - margin)) / margin;
-    }
-
-    const hardPad = 30;
-    this.headPos.x = clamp(this.headPos.x, hardPad, width - hardPad);
-    this.headPos.y = clamp(this.headPos.y, hardPad, height - hardPad);
-
-    if (pushX !== 0 || pushY !== 0) {
-      const avoidAngle = Math.atan2(pushY, pushX);
-      const diff = angleDiff(avoidAngle, this.heading);
-      const repulsionStrength = Math.min(1.0, Math.hypot(pushX, pushY));
-      const turnStep = clamp(diff * 0.08 * repulsionStrength, -0.06, 0.06);
-      this.heading = normalizeAngle(this.heading + turnStep * dt);
-    }
-  }
-
-  private updateSpine(dt: number) {
-    this.segments[0].pos.x = this.headPos.x;
-    this.segments[0].pos.y = this.headPos.y;
-    this.segments[0].angle = this.heading;
-
-    const baseSegLen = this.config.segmentLength * this.config.scale;
-
-    for (let i = 1; i < this.segments.length; i++) {
-      const prev = this.segments[i - 1];
-      const curr = this.segments[i];
-
-      const dx = curr.pos.x - prev.pos.x;
-      const dy = curr.pos.y - prev.pos.y;
-      let currentDir = Math.atan2(dy, dx);
-      if (isNaN(currentDir)) currentDir = prev.angle + Math.PI;
-
-      const naturalTrailingAngle = prev.angle + Math.PI;
-      const deviation = angleDiff(currentDir, naturalTrailingAngle);
-
-      const maxBend = 0.26;
-      const clampedDeviation = clamp(deviation, -maxBend, maxBend);
-      const jointAngle = naturalTrailingAngle + clampedDeviation;
-
-      const waveProgress = i / (this.segments.length - 1);
-      const waveAmpFactor = Math.pow(waveProgress, 1.35);
-      const waveFlex = Math.sin(this.swimPhase - i * 0.44) * (this.config.waveAmplitude * 0.038) * waveAmpFactor;
-      const effectiveWave = this.speed > 0.08 ? waveFlex : waveFlex * 0.18;
-
-      const finalAngle = jointAngle + effectiveWave;
-
-      curr.pos.x = prev.pos.x + Math.cos(finalAngle) * baseSegLen;
-      curr.pos.y = prev.pos.y + Math.sin(finalAngle) * baseSegLen;
-      curr.angle = finalAngle - Math.PI;
-    }
+  protected resetPosition(width: number, height: number): Vector2D {
+    return { x: width / 2, y: height / 2 };
   }
 
   /**
@@ -478,7 +135,7 @@ export class CleanerWrasse {
     this.renderLowPolyCaudalFin(ctx, scale, tailAnchor);
 
     // 4. Render Main Low-Poly Faceted Body (Bicolored: Royal Purple Mantle + Canary Yellow Belly & Flanks + Yellow Snout Ridge)
-    this.renderLowPolyBody(ctx, scale, snoutTip, tailAnchor, topPts, upperMidPts, centerPts, lowerMidPts, bottomPts);
+    this.renderLowPolyBody(ctx, snoutTip, tailAnchor, topPts, upperMidPts, centerPts, lowerMidPts, bottomPts);
 
     // 5. Render Pectoral Fin (Translucent golden yellow fan fluttering on flank)
     this.renderLowPolyPectoralFin(ctx, scale);
@@ -744,7 +401,6 @@ export class CleanerWrasse {
    */
   private renderLowPolyBody(
     ctx: CanvasRenderingContext2D,
-    scale: number,
     snoutTip: Vector2D,
     tailAnchor: Vector2D,
     topPts: Vector2D[],
@@ -860,7 +516,6 @@ export class CleanerWrasse {
     }
 
     // --- 3. Close mesh at caudal peduncle / tail anchor in bright sunny yellow ---
-    const last = segCount - 1;
     const prev = segCount - 2;
 
     this.drawTriangle(ctx, topPts[prev], tailAnchor, upperMidPts[prev], '#fde047', 'rgba(254, 240, 138, 0.25)');

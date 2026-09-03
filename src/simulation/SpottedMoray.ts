@@ -1,12 +1,7 @@
 import { Vector2D, Parasite } from '../types';
 import { lerp, clamp } from '../utils/math';
 import { parasiteUnit, drawParasite, drawEatRing, subsampleParasites } from './parasiteFx';
-
-export interface CleaningTargetSpot {
-  id: string;
-  name: string;
-  pos: Vector2D;
-}
+import { ClientFishBase, ClientFishState, CleaningTargetSpot } from './ClientFishBase';
 
 /**
  * Spotted Moray Eel (Gymnothorax moringa)
@@ -22,8 +17,7 @@ export interface CleaningTargetSpot {
  * - Cream/pale tan base coloration covered in organic dark chocolate/black leopard spots
  * - Thick continuous dorsal fin crest beginning along the nape with pale golden margin
  */
-export class SpottedMoray {
-  public pos: Vector2D = { x: 0, y: 0 };
+export class SpottedMoray extends ClientFishBase {
   public creviceOrigin: Vector2D = { x: 0, y: 0 };
   public targetPos: Vector2D = { x: 0, y: 0 };
   public heading: number = -0.32; // Diagonally up-right from reef crevice
@@ -31,7 +25,9 @@ export class SpottedMoray {
   // Scaled up by 20% (from 5.6 to 6.72)
   public scale: number = 6.72;
 
-  public state: 'entering' | 'stationary' | 'exiting' | 'exited' = 'entering';
+  // Unlike the other clients the moray drives its own entrance and exit:
+  // the ClientDirector reads `state` / `targetPos` and switches `mode`.
+  public state: ClientFishState = 'entering';
   public mode: 'queue' | 'active' = 'queue';
   public targetExtension: number = 0.28;
   public entrySpeed: number = 2.0;
@@ -40,35 +36,37 @@ export class SpottedMoray {
   // Extension fraction from behind reef: 0.0 (fully behind reef) to 1.0 (emerged showing snake-like head & neck)
   public extension: number = 0.0;
 
-  public animTime: number = 0;
-  public breathPhase: number = 0;
   public weavePhase: number = 0;
   public mouthAperture: number = 1.0;
 
-  public isVisible: boolean = true;
-
-  // Procedural Turn & Perspective Facing State
-  public facingPlayer: boolean = false;
-  public turnProgress: number = 0;
-  public turnSpeed: number = 0.0075;
-
-  // Parasites on needle teeth, tubular nostrils, snout, cheeks, and neck
-  public parasites: Parasite[] = [];
-
-  // Cavity gates driven by the ClientDirector (1 = open/eatable):
-  // gill parasites hide under the operculum flap, teeth behind the lips.
-  public gillOpen: number = 1;
-  public mouthGate: number = 1;
-
   constructor(canvasWidth: number, canvasHeight: number) {
+    super();
     this.calculatePositions(canvasWidth, canvasHeight);
     this.pos = { ...this.creviceOrigin };
     this.extension = 0.0;
     this.initParasites();
     this.parasites = subsampleParasites(this.parasites, 24);
+    // Perched on the tubular nostril at the very tip of the nose. The nostril
+    // is fixed to the skull (it doesn't move with the jaw), so these are plain
+    // body parasites, added after subsampling so they are always there.
+    let noseId = 900;
+    for (const c of [
+      { x: 41.6, y: -8.2 },
+      { x: 43.6, y: -9.9 },
+    ]) {
+      this.parasites.push({
+        id: noseId++,
+        type: 'body',
+        localX: c.x,
+        localY: c.y,
+        attachPart: 'body',
+        hoverTimer: 0,
+        removed: false,
+      });
+    }
   }
 
-  public calculatePositions(width: number, height: number) {
+  public calculatePositions(_width: number, height: number) {
     const startY = height * 0.68;
     const slopeAngleRad = (30 * Math.PI) / 180;
     const cot30 = 1 / Math.tan(slopeAngleRad);
@@ -101,7 +99,7 @@ export class SpottedMoray {
   /**
    * Initialize parasites on needle teeth, tubular nostrils, snout, and spotted neck
    */
-  private initParasites() {
+  protected initParasites() {
     this.parasites = [];
     let id = 500;
 
@@ -114,15 +112,17 @@ export class SpottedMoray {
       { x: 26.0, y: -3.2, part: 'upperTeeth' as const },
       { x: 22.0, y: -3.0, part: 'upperTeeth' as const },
       { x: 18.0, y: -2.8, part: 'upperTeeth' as const },
-      { x: 38.0, y: 8.5, part: 'lowerTeeth' as const },
-      { x: 36.0, y: 8.0, part: 'lowerTeeth' as const },
-      { x: 32.0, y: 7.8, part: 'lowerTeeth' as const },
-      { x: 28.0, y: 7.5, part: 'lowerTeeth' as const },
-      { x: 24.0, y: 7.2, part: 'lowerTeeth' as const },
-      { x: 20.0, y: 7.0, part: 'lowerTeeth' as const },
-      { x: 16.0, y: 6.8, part: 'lowerTeeth' as const },
-      { x: 42.0, y: -8.0, part: 'upperTeeth' as const }, // near tubular nostril
-      { x: 44.0, y: -6.0, part: 'upperTeeth' as const },
+      // Lower row sits ON the mandible (it tapers to a point at x=38, y=6)
+      { x: 36.0, y: 6.2, part: 'lowerTeeth' as const },
+      { x: 33.0, y: 6.4, part: 'lowerTeeth' as const },
+      { x: 30.0, y: 6.3, part: 'lowerTeeth' as const },
+      { x: 27.0, y: 6.0, part: 'lowerTeeth' as const },
+      { x: 24.0, y: 5.8, part: 'lowerTeeth' as const },
+      { x: 21.0, y: 5.5, part: 'lowerTeeth' as const },
+      { x: 18.0, y: 5.0, part: 'lowerTeeth' as const },
+      // Upper snout, inside the outline (the tip is at 42, -5)
+      { x: 36.0, y: -6.0, part: 'upperTeeth' as const },
+      { x: 32.0, y: -6.5, part: 'upperTeeth' as const },
     ];
 
     for (const c of mouthCoords) {
@@ -145,11 +145,13 @@ export class SpottedMoray {
       { x: 10.0, y: -16.5, part: 'body' as const },
       { x: 0.0, y: -17.0, part: 'body' as const },
       // Cheeks, Gill Aperture & Throat
-      { x: 16.0, y: 2.0, part: 'operculum' as const },
-      { x: 12.0, y: 4.0, part: 'operculum' as const },
-      { x: 6.0, y: 6.0, part: 'operculum' as const },
-      { x: 2.0, y: 8.0, part: 'operculum' as const },
-      { x: -3.0, y: 9.5, part: 'operculum' as const },
+      // Around the gill pore at (-14, 2), well behind the jaw hinge so they
+      // never sit inside the open mouth
+      { x: -9.0, y: 0.5, part: 'operculum' as const },
+      { x: -11.0, y: 4.5, part: 'operculum' as const },
+      { x: -17.0, y: 5.5, part: 'operculum' as const },
+      { x: -19.0, y: -0.5, part: 'operculum' as const },
+      { x: -13.0, y: -3.0, part: 'operculum' as const },
       { x: -8.0, y: 11.0, part: 'belly' as const },
       { x: -18.0, y: 12.5, part: 'belly' as const },
       // Visible Muscular Neck (Anterior 15-20%)
@@ -178,10 +180,18 @@ export class SpottedMoray {
     let lx = p.localX * s;
     let ly = p.localY * s;
 
-    if (p.attachPart === 'lowerTeeth') {
-      ly += (this.mouthAperture - 1.0) * (5.5 * s);
-    } else if (p.attachPart === 'upperTeeth') {
-      ly -= (this.mouthAperture - 1.0) * (2.0 * s);
+    if (p.attachPart === 'lowerTeeth' || p.attachPart === 'upperTeeth') {
+      // Ride the jaw: renderJawsAndTeeth rotates the mandible about its hinge
+      // at (15, 2) and the upper arch about (15, -1), so rotate the parasite
+      // around the same pivot by the same angle - it stays glued to the teeth
+      const lower = p.attachPart === 'lowerTeeth';
+      const hx = 15 * s;
+      const hy = (lower ? 2 : -1) * s;
+      const ang = (this.mouthAperture - 1.0) * (lower ? 0.18 : -0.06);
+      const dx = lx - hx;
+      const dy = ly - hy;
+      lx = hx + dx * Math.cos(ang) - dy * Math.sin(ang);
+      ly = hy + dx * Math.sin(ang) + dy * Math.cos(ang);
     } else if (p.attachPart === 'belly') {
       ly += Math.sin(this.breathPhase) * 1.5;
     } else if (p.attachPart === 'operculum') {
@@ -206,14 +216,6 @@ export class SpottedMoray {
     };
   }
 
-  public toggleFacingPlayer(): boolean {
-    return false;
-  }
-
-  public setFacingPlayer(_facing: boolean) {
-    this.facingPlayer = false;
-  }
-
   public setMode(mode: 'queue' | 'active') {
     this.mode = mode;
     if (mode === 'queue') {
@@ -234,10 +236,7 @@ export class SpottedMoray {
   }
 
   public startExit() {
-    if (this.state !== 'exited') {
-      this.state = 'exiting';
-      this.facingPlayer = false;
-    }
+    if (this.state !== 'exited') this.state = 'exiting';
   }
 
   public update(width: number, height: number, dt: number = 1) {
@@ -250,9 +249,6 @@ export class SpottedMoray {
 
     // Mouth aperture breathing rhythm (buccal pumping)
     this.mouthAperture = 0.85 + Math.sin(this.breathPhase) * 0.25;
-
-    this.turnProgress = 0;
-    this.facingPlayer = false;
 
     // State machine: Emerge from behind reef / Retreat back behind reef
     if (this.state === 'entering') {
@@ -280,17 +276,17 @@ export class SpottedMoray {
   }
 
   public updateParasites(
-    wrasseMouth: Vector2D | null,
-    gobiMouth: Vector2D | null,
+    hogfishMouth: Vector2D | null,
+    gobyMouth: Vector2D | null,
     _dt: number,
-    wrasseScale: number = 0.9,
-    gobiScale: number = 0.65
+    hogfishScale: number = 0.9,
+    gobyScale: number = 0.65
   ) {
     if (this.extension < 0.2) return;
 
     // Generous mouth touch radius matching the large scale of the moray eel
-    const wrasseEatDist = 32 * Math.max(0.75, wrasseScale);
-    const gobiEatDist = 28 * Math.max(0.75, gobiScale);
+    const hogfishEatDist = 32 * Math.max(0.75, hogfishScale);
+    const gobyEatDist = 28 * Math.max(0.75, gobyScale);
 
     for (const p of this.parasites) {
       if (p.removed) continue;
@@ -301,16 +297,16 @@ export class SpottedMoray {
 
       let isHovered = false;
 
-      // Check Wrasse
-      if (wrasseMouth) {
-        const dWrasse = Math.hypot(wx - wrasseMouth.x, wy - wrasseMouth.y);
-        if (dWrasse < wrasseEatDist) isHovered = true;
+      // Check Hogfish
+      if (hogfishMouth) {
+        const dHogfish = Math.hypot(wx - hogfishMouth.x, wy - hogfishMouth.y);
+        if (dHogfish < hogfishEatDist) isHovered = true;
       }
 
       // Check Goby
-      if (gobiMouth && !isHovered) {
-        const dGobi = Math.hypot(wx - gobiMouth.x, wy - gobiMouth.y);
-        if (dGobi < gobiEatDist) isHovered = true;
+      if (gobyMouth && !isHovered) {
+        const dGoby = Math.hypot(wx - gobyMouth.x, wy - gobyMouth.y);
+        if (dGoby < gobyEatDist) isHovered = true;
       }
 
       // Eat on touch, same as every other client species
@@ -381,16 +377,6 @@ export class SpottedMoray {
         const lp = this.getParasiteLocalPos(p);
         return { x: this.pos.x + lp.x, y: this.pos.y + lp.y };
       });
-  }
-
-  public getParasiteStats() {
-    const total = this.parasites.length;
-    const remaining = this.parasites.filter((p) => !p.removed).length;
-    const removed = total - remaining;
-    const teethRemaining = this.parasites.filter((p) => p.type === 'teeth' && !p.removed).length;
-    const bodyRemaining = this.parasites.filter((p) => p.type === 'body' && !p.removed).length;
-
-    return { total, remaining, removed, teethRemaining, bodyRemaining };
   }
 
   public hitTest(pt: Vector2D): boolean {
@@ -521,9 +507,9 @@ export class SpottedMoray {
 
     const finGrad = ctx.createLinearGradient(-10 * s, -24 * s, -140 * s, 10 * s);
     finGrad.addColorStop(0.0, 'rgba(254, 240, 138, 0.95)'); // Bright pale golden/cream rim
-    finGrad.addColorStop(0.25, 'rgba(245, 158, 11, 0.85)'); // Amber mid
-    finGrad.addColorStop(0.65, 'rgba(120, 53, 15, 0.9)'); // Dark chocolate
-    finGrad.addColorStop(1.0, 'rgba(41, 37, 36, 0.95)'); // Deep sepia
+    finGrad.addColorStop(0.25, 'rgba(250, 204, 21, 0.85)'); // Amber mid
+    finGrad.addColorStop(0.65, 'rgba(161, 98, 7, 0.9)'); // Dark chocolate
+    finGrad.addColorStop(1.0, 'rgba(120, 53, 15, 0.95)'); // Deep sepia
 
     ctx.fillStyle = finGrad;
     ctx.fill();
@@ -601,12 +587,12 @@ export class SpottedMoray {
 
     // Multi-stop Cream/Tan Warm Ivory to Rich Ochre Base Gradient
     const bodyGrad = ctx.createLinearGradient(42 * s, -16 * s, -120 * s, 20 * s);
-    bodyGrad.addColorStop(0.0, '#fef3c7'); // Pale cream/tan snout
+    bodyGrad.addColorStop(0.0, '#fefce8'); // Pale cream/tan snout
     bodyGrad.addColorStop(0.18, '#fde68a'); // Warm ivory cheek
-    bodyGrad.addColorStop(0.4, '#f59e0b'); // Golden ochre cranium
-    bodyGrad.addColorStop(0.65, '#d97706'); // Warm tan/amber neck
-    bodyGrad.addColorStop(0.85, '#92400e'); // Rich sepia trunk
-    bodyGrad.addColorStop(1.0, '#451a03'); // Deep crevice trunk
+    bodyGrad.addColorStop(0.4, '#fbbf24'); // Golden ochre cranium
+    bodyGrad.addColorStop(0.65, '#f59e0b'); // Warm tan/amber neck
+    bodyGrad.addColorStop(0.85, '#b45309'); // Rich sepia trunk
+    bodyGrad.addColorStop(1.0, '#78350f'); // Deep crevice trunk
 
     ctx.fillStyle = bodyGrad;
     ctx.fill();
@@ -978,7 +964,7 @@ export class SpottedMoray {
   /**
    * Parasites and removal animations
    */
-  private renderParasites(ctx: CanvasRenderingContext2D) {
+  protected renderParasites(ctx: CanvasRenderingContext2D) {
     const s = this.scale;
 
     for (const p of this.parasites) {
@@ -1012,128 +998,5 @@ export class SpottedMoray {
 
       ctx.restore();
     }
-  }
-
-  /**
-   * Perspective Facing Player Render: Gaping Frontal Moray Head with Needle Fangs
-   */
-  private renderFacing(ctx: CanvasRenderingContext2D) {
-    const s = this.scale * 0.9;
-    const aperture = this.mouthAperture;
-
-    ctx.save();
-
-    // Facing head on: Rounded diamond cranial dome
-    ctx.beginPath();
-    ctx.moveTo(0, -22 * s);
-    ctx.bezierCurveTo(14 * s, -18 * s, 18 * s, -4 * s, 16 * s, 12 * s);
-    ctx.bezierCurveTo(12 * s, 20 * s, -12 * s, 20 * s, -16 * s, 12 * s);
-    ctx.bezierCurveTo(-18 * s, -4 * s, -14 * s, -18 * s, 0, -22 * s);
-    ctx.closePath();
-
-    const faceGrad = ctx.createRadialGradient(0, 0, 3 * s, 0, 0, 20 * s);
-    faceGrad.addColorStop(0.0, '#fef3c7');
-    faceGrad.addColorStop(0.5, '#f59e0b');
-    faceGrad.addColorStop(1.0, '#78350f');
-
-    ctx.fillStyle = faceGrad;
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(254, 240, 138, 0.6)';
-    ctx.lineWidth = 1.2;
-    ctx.stroke();
-
-    // Dark Leopard Spots on frontal face
-    const frontalSpots = [
-      { x: -6, y: -16, r: 2.2 },
-      { x: 6, y: -16, r: 2.2 },
-      { x: 0, y: -12, r: 2.8 },
-      { x: -11, y: -8, r: 2.5 },
-      { x: 11, y: -8, r: 2.5 },
-      { x: -10, y: 12, r: 3.0 },
-      { x: 10, y: 12, r: 3.0 },
-      { x: 0, y: 16, r: 2.8 },
-    ];
-
-    for (const sp of frontalSpots) {
-      ctx.beginPath();
-      ctx.arc(sp.x * s, sp.y * s, sp.r * s, 0, Math.PI * 2);
-      ctx.fillStyle = '#1c1917';
-      ctx.fill();
-    }
-
-    // Frontal Beady Eyes
-    for (const side of [-1, 1]) {
-      ctx.save();
-      ctx.translate(side * 10 * s, -10 * s);
-
-      ctx.beginPath();
-      ctx.arc(0, 0, 3.0 * s, 0, Math.PI * 2);
-      ctx.fillStyle = '#eab308';
-      ctx.fill();
-
-      ctx.beginPath();
-      ctx.arc(0, 0, 1.6 * s, 0, Math.PI * 2);
-      ctx.fillStyle = '#09090b';
-      ctx.fill();
-
-      ctx.beginPath();
-      ctx.arc(-0.5 * s, -0.5 * s, 0.6 * s, 0, Math.PI * 2);
-      ctx.fillStyle = '#ffffff';
-      ctx.fill();
-
-      ctx.restore();
-
-      // Frontal Tubular Nostrils
-      ctx.beginPath();
-      ctx.arc(side * 3.5 * s, -14 * s, 1.2 * s, 0, Math.PI * 2);
-      ctx.fillStyle = '#fde68a';
-      ctx.fill();
-      ctx.strokeStyle = '#78350f';
-      ctx.lineWidth = 0.6;
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.arc(side * 3.5 * s, -14 * s, 0.5 * s, 0, Math.PI * 2);
-      ctx.fillStyle = '#0c0a09';
-      ctx.fill();
-    }
-
-    // Huge Cavernous Frontal Gaping Mouth
-    ctx.beginPath();
-    ctx.ellipse(0, 2 * s, 8 * s, 7 * s * aperture, 0, 0, Math.PI * 2);
-    ctx.fillStyle = '#2e1065';
-    ctx.fill();
-    ctx.strokeStyle = '#881337';
-    ctx.lineWidth = 1.2;
-    ctx.stroke();
-
-    // Upper & Lower Needle Fangs in Frontal View
-    ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#450a0a';
-    ctx.lineWidth = 0.5;
-
-    // Upper fangs
-    for (const ox of [-5, -2.5, 0, 2.5, 5]) {
-      ctx.beginPath();
-      ctx.moveTo((ox - 0.7) * s, (2 - 7 * aperture) * s);
-      ctx.lineTo(ox * s, (2 - 7 * aperture + 4.0) * s);
-      ctx.lineTo((ox + 0.7) * s, (2 - 7 * aperture) * s);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-    }
-
-    // Lower fangs
-    for (const ox of [-4, -1.8, 1.8, 4]) {
-      ctx.beginPath();
-      ctx.moveTo((ox - 0.7) * s, (2 + 7 * aperture) * s);
-      ctx.lineTo(ox * s, (2 + 7 * aperture - 3.5) * s);
-      ctx.lineTo((ox + 0.7) * s, (2 + 7 * aperture) * s);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-    }
-
-    ctx.restore();
   }
 }

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { BookOpen, Check, ChevronLeft, ChevronRight, Sparkles, Volume2, VolumeX, Waves, X } from 'lucide-react';
+import { BookOpen, Check, ChevronLeft, ChevronRight, Flower2, Sparkles, Volume2, VolumeX, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { getSoundMode, setSoundMode, SoundMode, initAudioOnInteraction } from '../utils/audio';
 
@@ -77,7 +77,8 @@ interface FieldNotesProps {
   open: boolean;
   onToggle: () => void;
   /** Clients still to clean before the next note unlocks; null = all found */
-  toNext: number | null;
+  /** Every note has been unlocked */
+  allCollected: boolean;
 }
 
 interface CrawlingCrabProps {
@@ -268,7 +269,7 @@ export const FieldNotes: React.FC<FieldNotesProps> = ({
   unread,
   open,
   onToggle,
-  toNext,
+  allCollected,
 }) => {
   // One note at a time, newest first; arrows page through earlier ones
   const [idx, setIdx] = useState(0);
@@ -331,11 +332,11 @@ export const FieldNotes: React.FC<FieldNotesProps> = ({
             </div>
             {!note && (
               <div className="text-[11px] opacity-70 leading-relaxed py-2">
-                Nothing collected yet — send clients away fully cleaned to earn field notes about
+                Nothing collected yet. Send clients away fully cleaned to earn field notes about
                 real cleaning-station biology.
               </div>
             )}
-            {toNext !== null ? (
+            {!allCollected ? (
               <div className="text-[10px] font-mono text-cyan-300/70 pb-1">
                 Clean another fish to earn the next note
               </div>
@@ -452,7 +453,7 @@ export const FieldNotes: React.FC<FieldNotesProps> = ({
               >
                 <div className="flex items-center gap-2.5">
                   <div className="w-6 h-6 rounded-lg bg-cyan-900/50 flex items-center justify-center">
-                    <Waves className="w-3.5 h-3.5 text-cyan-300" />
+                    <Flower2 className="w-3.5 h-3.5 text-cyan-300" />
                   </div>
                   <span className="text-[12px] font-medium leading-none">Spa</span>
                 </div>
@@ -491,15 +492,15 @@ export const FieldNotes: React.FC<FieldNotesProps> = ({
             setSoundMenuOpen((prev) => !prev);
           }}
           className={`pointer-events-auto relative flex items-center gap-2 px-3 py-1.5 rounded-2xl border transition-all duration-200 cursor-pointer font-mono shadow-[0_8px_24px_rgba(0,0,0,0.4)] backdrop-blur-md ${
-            soundMode !== 'off'
-              ? soundMode === 'carwash'
-                ? 'bg-amber-950/70 hover:bg-amber-900/90 border-amber-400/50 hover:border-amber-300 text-amber-200 hover:text-white shadow-[0_0_15px_rgba(245,158,11,0.25)]'
-                : 'bg-cyan-950/70 hover:bg-cyan-900/90 border-cyan-400/40 hover:border-cyan-300 text-cyan-200 hover:text-white'
-              : 'bg-black/60 hover:bg-black/80 border-white/10 hover:border-white/20 text-slate-400 hover:text-slate-200'
+            soundMode === 'off'
+              ? 'bg-black/60 hover:bg-black/80 border-white/10 hover:border-white/20 text-slate-400 hover:text-slate-200'
+              : soundMode === 'carwash'
+              ? 'bg-amber-950/70 hover:bg-amber-900/90 border-amber-400/50 hover:border-amber-300 text-amber-200 hover:text-white shadow-[0_0_15px_rgba(245,158,11,0.25)]'
+              : 'bg-cyan-950/70 hover:bg-cyan-900/90 border-cyan-400/40 hover:border-cyan-300 text-cyan-200 hover:text-white'
           } ${soundMenuOpen ? 'ring-2 ring-cyan-400/50' : ''}`}
           aria-label="Sound options"
           aria-expanded={soundMenuOpen}
-          title="Sound options: Off, Spa, or Carwash"
+          title="Sound options: Off, Spa or Carwash"
         >
           {soundMode === 'off' ? (
             <VolumeX className="w-3.5 h-3.5 text-slate-400" />

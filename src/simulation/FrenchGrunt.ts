@@ -1,12 +1,7 @@
 import { Vector2D, Parasite } from '../types';
 import { lerp } from '../utils/math';
 import { parasiteUnit, drawParasite, drawEatRing } from './parasiteFx';
-
-export interface CleaningTargetSpot {
-  id: string;
-  name: string;
-  pos: Vector2D;
-}
+import { ClientFishBase, CleaningTargetSpot } from './ClientFishBase';
 
 export interface GruntMember {
   id: number;
@@ -38,32 +33,17 @@ export interface GruntMember {
  * - Dedicated parasites distributed across all 3 fish
  * - Schooling arrival into queue together, activation together, cleaning together, and departure together
  */
-export class FrenchGrunt {
-  public pos: Vector2D = { x: 0, y: 0 };
-  public targetPos: Vector2D = { x: 0, y: 0 };
-  public heading: number = Math.PI;
-
+export class FrenchGrunt extends ClientFishBase {
   public scale: number = 2.04;
-
-  public state: 'entering' | 'stationary' | 'exiting' | 'exited' = 'entering';
-  public entrySpeed: number = 2.7;
-  public exitSpeed: number = 3.3;
-
-  public animTime: number = 0;
-  public breathPhase: number = 0;
-  public finPhase: number = 0;
   public mouthAperture: number = 0.8;
 
-  public isVisible: boolean = true;
-  public facingPlayer: boolean = false;
-  public turnProgress: number = 0;
-
-  // Parasites distributed across all 3 fish in the school
-  public parasites: Parasite[] = [];
-
-  // Cavity gates driven by ClientDirector
-  public gillOpen: number = 1;
-  public mouthGate: number = 1;
+  // Each grunt gapes on its own: 0 closed .. 1 fully open, driven by a
+  // cleaner mouth near THAT member's mouth (with hysteresis so hover jitter
+  // doesn't slam it shut). The director's shared mouthGate is ignored here.
+  private memberGape: number[] = [0, 0, 0];
+  private static readonly GAPE_APERTURE = 1.9;
+  private static readonly MOUTH_REACH = 60;
+  private static readonly MOUTH_REACH_HOLD = 110;
 
   // The 3 distinctly visible school members
   public readonly members: GruntMember[] = [
@@ -103,12 +83,10 @@ export class FrenchGrunt {
   ];
 
   constructor(canvasWidth: number, canvasHeight: number) {
+    super();
+    // Start offscreen to the right; the director swims the school in from here
     this.pos = {
       x: canvasWidth + 400,
-      y: canvasHeight * 0.47,
-    };
-    this.targetPos = {
-      x: this.getProfileTargetX(canvasWidth),
       y: canvasHeight * 0.47,
     };
 
@@ -119,7 +97,7 @@ export class FrenchGrunt {
    * Initializes parasites across all 3 fish members.
    * Each fish receives between 10 and 12 parasites, for a total of between 30 and 36 across the school.
    */
-  private initParasites() {
+  protected initParasites() {
     this.parasites = [];
     let idCounter = 500;
 
@@ -214,6 +192,65 @@ export class FrenchGrunt {
   /**
    * Returns parasite local position relative to that specific member's center
    */
+  /** World position of one member's mouth (lips sit at -33, +2.5 in member space). */
+  private memberMouthWorld(memberId: number): Vector2D {
+    const mem = this.members[memberId];
+    const local = this.getMemberLocalPos(mem);
+    const ms = this.scale * mem.scaleMult;
+    return { x: this.pos.x + local.x - 33 * ms, y: this.pos.y + local.y + 2.5 * ms };
+  }
+
+  /** Resting breathing aperture blended toward a full gape by that member's own gape. */
+  private memberAperture(memberId: number): number {
+    const g = Math.min(1, (this.memberGape[memberId] ?? 0) * 1.15);
+    return this.mouthAperture * (1 - g) + FrenchGrunt.GAPE_APERTURE * g;
+  }
+
+  /**
+   * Each member opens its mouth only when a cleaner is at ITS mouth, and only
+   * that member's teeth parasites become reachable.
+   */
+  public updateParasites(
+    hogfishMouth: Vector2D | null,
+    gobyMouth: Vector2D | null,
+    dt: number,
+    hogfishScale: number = 0.9,
+    gobyScale: number = 0.65
+  ) {
+    const mouths = [hogfishMouth, gobyMouth].filter((m): m is Vector2D => m !== null);
+    for (let i = 0; i < this.members.length; i++) {
+      const mw = this.memberMouthWorld(i);
+      const reach = this.memberGape[i] > 0.5 ? FrenchGrunt.MOUTH_REACH_HOLD : FrenchGrunt.MOUTH_REACH;
+      const near = mouths.some((m) => Math.hypot(m.x - mw.x, m.y - mw.y) < reach);
+      this.memberGape[i] += ((near ? 1 : 0) - this.memberGape[i]) * Math.min(1, 0.08 * dt);
+    }
+
+    const hogfishEatDist = 20 * hogfishScale;
+    const gobyEatDist = 18 * gobyScale;
+    for (const p of this.parasites) {
+      if (p.removed) continue;
+      if (p.attachPart === 'operculum' && this.gillOpen < 0.6) continue;
+      if (
+        (p.attachPart === 'upperTeeth' || p.attachPart === 'lowerTeeth') &&
+        (this.memberGape[p.fishIndex ?? 0] ?? 0) < 0.6
+      ) {
+        continue;
+      }
+      const wPos = this.getParasiteWorldPos(p);
+      let isEaten = false;
+      if (hogfishMouth && Math.hypot(wPos.x - hogfishMouth.x, wPos.y - hogfishMouth.y) <= hogfishEatDist) {
+        isEaten = true;
+      }
+      if (!isEaten && gobyMouth && Math.hypot(wPos.x - gobyMouth.x, wPos.y - gobyMouth.y) <= gobyEatDist) {
+        isEaten = true;
+      }
+      if (isEaten) {
+        p.removed = true;
+        p.hoverTimer = 1;
+      }
+    }
+  }
+
   public getParasiteMemberLocalPos(p: Parasite, memberScale: number, memberId: number): Vector2D {
     const mem = this.members[memberId] || this.members[0];
     let lx = p.localX * memberScale;
@@ -221,7 +258,7 @@ export class FrenchGrunt {
     const breath = this.breathPhase + mem.breathPhaseOffset;
 
     if (p.attachPart === 'lowerTeeth') {
-      ly = p.localY * this.mouthAperture * memberScale;
+      ly = p.localY * this.memberAperture(memberId) * memberScale;
     } else if (p.attachPart === 'belly') {
       ly = p.localY * memberScale + Math.sin(breath) * 1.4;
     } else if (p.attachPart === 'operculum') {
@@ -243,118 +280,6 @@ export class FrenchGrunt {
       x: memPos.x + pl.x,
       y: memPos.y + pl.y,
     };
-  }
-
-  /**
-   * Parasite world position on canvas
-   */
-  public getParasiteWorldPos(p: Parasite): Vector2D {
-    const local = this.getParasiteLocalPos(p);
-    return {
-      x: this.pos.x + local.x,
-      y: this.pos.y + local.y,
-    };
-  }
-
-  /**
-   * Updates parasite eating detection across all 3 fish
-   */
-  public updateParasites(
-    wrasseMouth: Vector2D | null,
-    gobiMouth: Vector2D | null,
-    _dt: number,
-    wrasseScale: number = 0.9,
-    gobiScale: number = 0.65
-  ) {
-    const wrasseEatDist = 20 * wrasseScale;
-    const gobiEatDist = 18 * gobiScale;
-
-    for (const p of this.parasites) {
-      if (p.removed) continue;
-      if (p.attachPart === 'operculum' && this.gillOpen < 0.6) continue;
-      if ((p.attachPart === 'upperTeeth' || p.attachPart === 'lowerTeeth') && this.mouthGate < 0.6) continue;
-
-      const wPos = this.getParasiteWorldPos(p);
-      let isEaten = false;
-
-      if (wrasseMouth) {
-        const d = Math.hypot(wPos.x - wrasseMouth.x, wPos.y - wrasseMouth.y);
-        if (d <= wrasseEatDist) isEaten = true;
-      }
-
-      if (!isEaten && gobiMouth) {
-        const d = Math.hypot(wPos.x - gobiMouth.x, wPos.y - gobiMouth.y);
-        if (d <= gobiEatDist) isEaten = true;
-      }
-
-      if (isEaten) {
-        p.removed = true;
-        p.hoverTimer = 1;
-      }
-    }
-  }
-
-  public getActiveParasitePositions(): Vector2D[] {
-    const spots: Vector2D[] = [];
-    for (const p of this.parasites) {
-      if (!p.removed) {
-        spots.push(this.getParasiteWorldPos(p));
-      }
-    }
-    return spots;
-  }
-
-  /**
-   * Parasite statistics across ALL fish in the school.
-   * Fully cleaned is only achieved when remaining === 0 (all parasites from all 3 fish eaten).
-   */
-  public getParasiteStats() {
-    let teethTotal = 0;
-    let teethRemoved = 0;
-    let bodyTotal = 0;
-    let bodyRemoved = 0;
-
-    for (const p of this.parasites) {
-      if (p.type === 'teeth') {
-        teethTotal++;
-        if (p.removed) teethRemoved++;
-      } else {
-        bodyTotal++;
-        if (p.removed) bodyRemoved++;
-      }
-    }
-
-    const total = teethTotal + bodyTotal;
-    const removed = teethRemoved + bodyRemoved;
-    const remaining = total - removed;
-
-    return {
-      total,
-      remaining,
-      removed,
-      teethRemaining: teethTotal - teethRemoved,
-      bodyRemaining: bodyTotal - bodyRemoved,
-    };
-  }
-
-  private getProfileTargetX(canvasWidth: number): number {
-    const s = this.scale;
-    return canvasWidth - (64 * s + 30);
-  }
-
-  public startExit() {
-    if (this.state !== 'exiting' && this.state !== 'exited') {
-      this.state = 'exiting';
-      this.facingPlayer = false;
-    }
-  }
-
-  public setFacingPlayer(_facing: boolean) {
-    this.facingPlayer = false;
-  }
-
-  public toggleFacingPlayer(): boolean {
-    return false;
   }
 
   /**
@@ -408,15 +333,13 @@ export class FrenchGrunt {
     return spots;
   }
 
-  public update(_canvasWidth: number, _canvasHeight: number, dt: number) {
+  public update(_w: number, _h: number, dt: number) {
     this.animTime += dt * 0.038;
     this.breathPhase += dt * 0.048;
     this.finPhase += dt * 0.12;
 
     // Small mouth rhythmic pulsing
     this.mouthAperture = 0.75 + Math.sin(this.breathPhase * 1.4) * 0.25;
-    this.turnProgress = 0;
-    this.facingPlayer = false;
   }
 
   /**
@@ -476,7 +399,7 @@ export class FrenchGrunt {
     this.renderLargeExpressiveEye(ctx, s);
 
     // 9. Small Grunt Mouth & Scarlet Red Gape
-    this.renderSmallMouth(ctx, s);
+    this.renderSmallMouth(ctx, s, this.memberAperture(mem.id));
 
     // 10. Translucent Yellow Pectoral Fin
     this.renderPectoralFin(ctx, s, finWave);
@@ -863,9 +786,8 @@ export class FrenchGrunt {
   /**
    * Relatively Small Grunt Mouth & Pale Lips with Scarlet Red Interior
    */
-  private renderSmallMouth(ctx: CanvasRenderingContext2D, s: number) {
+  private renderSmallMouth(ctx: CanvasRenderingContext2D, s: number, aperture: number) {
     ctx.save();
-    const aperture = this.mouthAperture;
 
     // Fleshy pale lips
     ctx.beginPath();

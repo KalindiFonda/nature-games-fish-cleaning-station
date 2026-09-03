@@ -1,4 +1,4 @@
-export type ControlledFish = 'wrasse' | 'gobi';
+export type ControlledFish = 'hogfish' | 'goby';
 export type ClientFishSpecies =
   | 'grouper'
   | 'queen_parrotfish'
@@ -22,6 +22,15 @@ export interface ClientFishInfo {
   isVisible: boolean;
 }
 
+/** Cleaning progress on one client, as reported to the UI */
+export interface ParasiteStats {
+  total: number;
+  remaining: number;
+  removed: number;
+  teethRemaining: number;
+  bodyRemaining: number;
+}
+
 export interface Vector2D {
   x: number;
   y: number;
@@ -33,20 +42,6 @@ export interface FishSegment {
   angle: number;
   width: number;
   height: number;
-}
-
-export interface FishBehaviorState {
-  target: Vector2D;
-  speed: number;
-  baseSpeed: number;
-  maxSpeed: number;
-  heading: number;
-  angularVelocity: number;
-  swimPhase: number;
-  finPhase: number;
-  mode: 'cruise' | 'dart' | 'inspect' | 'hover' | 'follow';
-  modeTimer: number;
-  isDancing: boolean;
 }
 
 export interface FishConfig {

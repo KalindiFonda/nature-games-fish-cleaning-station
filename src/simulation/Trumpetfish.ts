@@ -1,12 +1,7 @@
 import { Vector2D, Parasite } from '../types';
-import { lerp, clamp } from '../utils/math';
+import { clamp } from '../utils/math';
 import { parasiteUnit, drawParasite, drawEatRing, subsampleParasites } from './parasiteFx';
-
-export interface CleaningTargetSpot {
-  id: string;
-  name: string;
-  pos: Vector2D;
-}
+import { ClientFishBase, CleaningTargetSpot } from './ClientFishBase';
 
 /**
  * Atlantic Trumpetfish (Aulostomus maculatus)
@@ -19,45 +14,18 @@ export interface CleaningTargetSpot {
  * - Very thin, tapered caudal peduncle and small rounded tail fin with black ocellus
  * - Golden-yellow/amber and mottled brown coloration with luminous highlights
  */
-export class Trumpetfish {
-  public pos: Vector2D = { x: 0, y: 0 };
-  public targetPos: Vector2D = { x: 0, y: 0 };
-  public heading: number = Math.PI; // Facing left toward cleaning station
-
+export class Trumpetfish extends ClientFishBase {
   // Scaled up by 20% (from 3.9 to 4.68)
   public scale: number = 4.68;
-
-  public state: 'entering' | 'stationary' | 'exiting' | 'exited' = 'entering';
-  public entrySpeed: number = 2.5;
-  public exitSpeed: number = 3.2;
-
-  public animTime: number = 0;
-  public breathPhase: number = 0;
-  public finPhase: number = 0;
   public mouthAperture: number = 0.8;
 
-  public isVisible: boolean = true;
-
-  // Procedural Turn & Perspective Facing State
-  public facingPlayer: boolean = false;
-  public turnProgress: number = 0; // 0.0 = Profile, 1.0 = Facing Player
-  public turnSpeed: number = 0.0075;
-
-  // Parasites on tubular snout, tiny terminal mouth, barbel, elongated torso, and rear fins
-  public parasites: Parasite[] = [];
-
-  // Cavity gates driven by the ClientDirector (1 = open/eatable):
-  // gill parasites hide under the operculum flap, teeth behind the lips.
-  public gillOpen: number = 1;
-  public mouthGate: number = 1;
+  protected hitBox = { minX: -100, maxX: 115, minY: -20, maxY: 20 };
 
   constructor(canvasWidth: number, canvasHeight: number) {
+    super();
+    // Start offscreen to the right; the director swims the fish in from here
     this.pos = {
       x: canvasWidth + 500,
-      y: canvasHeight * 0.48,
-    };
-    this.targetPos = {
-      x: this.getProfileTargetX(canvasWidth),
       y: canvasHeight * 0.48,
     };
 
@@ -68,7 +36,7 @@ export class Trumpetfish {
   /**
    * Initialize parasites over the long tubular snout, mouth, elongated flank, and rear fins
    */
-  private initParasites() {
+  protected initParasites() {
     this.parasites = [];
     let id = 400;
 
@@ -169,80 +137,25 @@ export class Trumpetfish {
     return { x: lx, y: ly };
   }
 
-  public getProfileTargetX(canvasWidth: number): number {
-    // Slender trumpetfish with long tubular snout reaching left
-    return canvasWidth - (105 * this.scale + 24);
-  }
-
-  public getFacingTargetX(canvasWidth: number): number {
-    return canvasWidth * 0.58;
-  }
-
-  public setFacingPlayer(_facing?: boolean) {
-    this.facingPlayer = false;
-  }
-
-  public toggleFacingPlayer(): boolean {
-    return false;
-  }
-
-  public startExit() {
-    if (this.state === 'stationary' || this.state === 'entering') {
-      this.state = 'exiting';
-    }
-  }
-
-  public update(canvasWidth: number, canvasHeight: number, dt: number) {
+  public update(_w: number, _h: number, dt: number) {
     this.animTime += 0.018 * dt;
     this.breathPhase += 0.024 * dt;
     this.finPhase += 0.045 * dt;
 
     // Gentle buccal respiratory pulsation
     this.mouthAperture = 0.8 + Math.sin(this.breathPhase) * 0.18;
-
-    this.turnProgress = 0;
-    this.facingPlayer = false;
-
-    const profileTargetX = this.getProfileTargetX(canvasWidth);
-    this.targetPos.x = profileTargetX;
-    this.targetPos.y = canvasHeight * 0.48;
-
-    // State machine
-    if (this.state === 'entering') {
-      const dx = this.targetPos.x - this.pos.x;
-      const dy = this.targetPos.y - this.pos.y;
-      this.pos.x += dx * 0.025 * this.entrySpeed * dt;
-      this.pos.y += dy * 0.025 * this.entrySpeed * dt;
-
-      if (Math.abs(dx) < 4 && Math.abs(dy) < 4) {
-        this.state = 'stationary';
-        this.pos.x = this.targetPos.x;
-        this.pos.y = this.targetPos.y;
-      }
-    } else if (this.state === 'stationary') {
-      // Natural aquatic hover with subtle buoyant micro-sway
-      const hoverX = Math.cos(this.animTime * 0.7) * 2.0;
-      const hoverY = Math.sin(this.animTime * 0.9) * 3.0;
-      this.pos.x = this.targetPos.x + hoverX;
-      this.pos.y = this.targetPos.y + hoverY;
-    } else if (this.state === 'exiting') {
-      // Graceful reverse backing away
-      this.pos.x += 4.2 * this.exitSpeed * dt;
-      this.pos.y += Math.sin(this.animTime * 1.5) * 0.8 * dt;
-
-      if (this.pos.x > canvasWidth + 600) {
-        this.state = 'exited';
-        this.isVisible = false;
-      }
-    }
   }
 
+  /**
+   * Eat check with a slightly wider reach on the tiny terminal mouth, so the
+   * snout-tip parasites are not fiddly to reach.
+   */
   public updateParasites(
-    wrasseMouth: Vector2D | null,
-    gobiMouth: Vector2D | null,
-    dt: number,
-    wrasseScale: number,
-    gobiScale: number
+    hogfishMouth: Vector2D | null,
+    gobyMouth: Vector2D | null,
+    _dt: number,
+    hogfishScale: number,
+    gobyScale: number
   ) {
     for (const p of this.parasites) {
       if (p.removed) continue;
@@ -255,18 +168,18 @@ export class Trumpetfish {
 
       let isHovered = false;
 
-      // Check Wrasse
-      if (wrasseMouth) {
-        const dWrasse = Math.hypot(wx - wrasseMouth.x, wy - wrasseMouth.y);
-        const threshold = (p.type === 'teeth' ? 24 : 20) * wrasseScale;
-        if (dWrasse < threshold) isHovered = true;
+      // Check hogfish
+      if (hogfishMouth) {
+        const dHogfish = Math.hypot(wx - hogfishMouth.x, wy - hogfishMouth.y);
+        const threshold = (p.type === 'teeth' ? 24 : 20) * hogfishScale;
+        if (dHogfish < threshold) isHovered = true;
       }
 
-      // Check Goby
-      if (gobiMouth && !isHovered) {
-        const dGobi = Math.hypot(wx - gobiMouth.x, wy - gobiMouth.y);
-        const threshold = (p.type === 'teeth' ? 22 : 18) * gobiScale;
-        if (dGobi < threshold) isHovered = true;
+      // Check goby
+      if (gobyMouth && !isHovered) {
+        const dGoby = Math.hypot(wx - gobyMouth.x, wy - gobyMouth.y);
+        const threshold = (p.type === 'teeth' ? 22 : 18) * gobyScale;
+        if (dGoby < threshold) isHovered = true;
       }
 
       // Eat on touch, same as every other client species
@@ -324,35 +237,6 @@ export class Trumpetfish {
     });
 
     return spots;
-  }
-
-  public getActiveParasitePositions(): Vector2D[] {
-    return this.parasites
-      .filter((p) => !p.removed)
-      .map((p) => {
-        const lp = this.getParasiteLocalPos(p);
-        return { x: this.pos.x + lp.x, y: this.pos.y + lp.y };
-      });
-  }
-
-  public getParasiteStats() {
-    const total = this.parasites.length;
-    const remaining = this.parasites.filter((p) => !p.removed).length;
-    const removed = total - remaining;
-    const teethRemaining = this.parasites.filter((p) => p.type === 'teeth' && !p.removed).length;
-    const bodyRemaining = this.parasites.filter((p) => p.type === 'body' && !p.removed).length;
-
-    return { total, remaining, removed, teethRemaining, bodyRemaining };
-  }
-
-  public hitTest(pt: Vector2D): boolean {
-    const s = this.scale;
-    const minX = this.pos.x - 100 * s;
-    const maxX = this.pos.x + 115 * s;
-    const minY = this.pos.y - 20 * s;
-    const maxY = this.pos.y + 20 * s;
-
-    return pt.x >= minX && pt.x <= maxX && pt.y >= minY && pt.y <= maxY;
   }
 
   /**
@@ -868,7 +752,7 @@ export class Trumpetfish {
   /**
    * Parasites and removal animations
    */
-  private renderParasites(ctx: CanvasRenderingContext2D) {
+  protected renderParasites(ctx: CanvasRenderingContext2D) {
     const s = this.scale;
 
     for (const p of this.parasites) {
@@ -902,76 +786,5 @@ export class Trumpetfish {
 
       ctx.restore();
     }
-  }
-
-  /**
-   * Perspective Facing Player Render
-   */
-  private renderFacing(ctx: CanvasRenderingContext2D) {
-    const s = this.scale * 0.85;
-    const breath = Math.sin(this.breathPhase) * 1.5;
-
-    ctx.save();
-
-    // Facing head on: Slender vertically elongated diamond snout & cranium
-    ctx.beginPath();
-    ctx.moveTo(0, (-16 + breath * 0.2) * s);
-    ctx.bezierCurveTo(8 * s, -10 * s, 10 * s, 4 * s, 6 * s, (14 + breath * 0.4) * s);
-    ctx.bezierCurveTo(2 * s, 16 * s, -2 * s, 16 * s, -6 * s, (14 + breath * 0.4) * s);
-    ctx.bezierCurveTo(-10 * s, 4 * s, -8 * s, -10 * s, 0, (-16 + breath * 0.2) * s);
-    ctx.closePath();
-
-    const faceGrad = ctx.createRadialGradient(0, 0, 2 * s, 0, 0, 15 * s);
-    faceGrad.addColorStop(0.0, '#fde047');
-    faceGrad.addColorStop(0.6, '#d97706');
-    faceGrad.addColorStop(1.0, '#78350f');
-
-    ctx.fillStyle = faceGrad;
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(254, 240, 138, 0.6)';
-    ctx.lineWidth = 1.2;
-    ctx.stroke();
-
-    // Eyes on either side
-    for (const side of [-1, 1]) {
-      ctx.save();
-      ctx.translate(side * 8 * s, -6 * s);
-
-      ctx.beginPath();
-      ctx.arc(0, 0, 3.0 * s, 0, Math.PI * 2);
-      ctx.fillStyle = '#eab308';
-      ctx.fill();
-
-      ctx.beginPath();
-      ctx.arc(0, 0, 1.6 * s, 0, Math.PI * 2);
-      ctx.fillStyle = '#09090b';
-      ctx.fill();
-
-      ctx.beginPath();
-      ctx.arc(-0.5 * s, -0.5 * s, 0.6 * s, 0, Math.PI * 2);
-      ctx.fillStyle = '#ffffff';
-      ctx.fill();
-
-      ctx.restore();
-    }
-
-    // Tiny terminal mouth opening at center
-    ctx.beginPath();
-    ctx.ellipse(0, 6 * s, 2.5 * s, 1.8 * s * this.mouthAperture, 0, 0, Math.PI * 2);
-    ctx.fillStyle = '#451a03';
-    ctx.fill();
-    ctx.strokeStyle = '#fef08a';
-    ctx.lineWidth = 0.8;
-    ctx.stroke();
-
-    // Chin barbel
-    ctx.beginPath();
-    ctx.moveTo(0, 8.5 * s);
-    ctx.lineTo(0.5 * s, 13 * s);
-    ctx.strokeStyle = '#fde047';
-    ctx.lineWidth = 1.0;
-    ctx.stroke();
-
-    ctx.restore();
   }
 }

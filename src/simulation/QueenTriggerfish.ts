@@ -1,12 +1,7 @@
 import { Vector2D, Parasite } from '../types';
-import { lerp, clamp } from '../utils/math';
-import { parasiteUnit, drawParasite, drawEatRing, subsampleParasites } from './parasiteFx';
-
-export interface CleaningTargetSpot {
-  id: string;
-  name: string;
-  pos: Vector2D;
-}
+import { clamp } from '../utils/math';
+import { subsampleParasites } from './parasiteFx';
+import { ClientFishBase, CleaningTargetSpot } from './ClientFishBase';
 
 /**
  * Queen Triggerfish (Balistes vetula)
@@ -20,46 +15,19 @@ export interface CleaningTargetSpot {
  * - Two iconic curved electric-blue facial bands across snout and cheek
  * - Elaborate scalloped caudal tail with long streaming upper and lower filament extensions
  */
-export class QueenTriggerfish {
-  public pos: Vector2D = { x: 0, y: 0 };
-  public targetPos: Vector2D = { x: 0, y: 0 };
-  public heading: number = Math.PI; // Facing left toward cleaning station
-
+export class QueenTriggerfish extends ClientFishBase {
   // Scaled up by 20% (from 2.8 to 3.36)
   public scale: number = 3.36;
-
-  public state: 'entering' | 'stationary' | 'exiting' | 'exited' = 'entering';
-  public entrySpeed: number = 2.7;
-  public exitSpeed: number = 3.3;
-
-  public animTime: number = 0;
-  public breathPhase: number = 0;
-  public finPhase: number = 0;
   public spinePhase: number = 0;
   public mouthAperture: number = 0.85;
 
-  public isVisible: boolean = true;
-
-  // Procedural Turn & Perspective Facing State
-  public facingPlayer: boolean = false;
-  public turnProgress: number = 0; // 0.0 = Profile, 1.0 = Facing Player
-  public turnSpeed: number = 0.0075;
-
-  // Parasites on puckered mouth, facial stripes, and body
-  public parasites: Parasite[] = [];
-
-  // Cavity gates driven by the ClientDirector (1 = open/eatable):
-  // gill parasites hide under the operculum flap, teeth behind the lips.
-  public gillOpen: number = 1;
-  public mouthGate: number = 1;
+  protected hitBox = { minX: -45, maxX: 55, minY: -32, maxY: 30 };
 
   constructor(canvasWidth: number, canvasHeight: number) {
+    super();
+    // Start offscreen to the right; the director swims the fish in from here
     this.pos = {
       x: canvasWidth + 450,
-      y: canvasHeight * 0.48,
-    };
-    this.targetPos = {
-      x: this.getProfileTargetX(canvasWidth),
       y: canvasHeight * 0.48,
     };
 
@@ -70,7 +38,7 @@ export class QueenTriggerfish {
   /**
    * Initialize parasites over the puckered mouth, facial bands, and diamond flanks
    */
-  private initParasites() {
+  protected initParasites() {
     this.parasites = [];
     let id = 300;
 
@@ -171,171 +139,12 @@ export class QueenTriggerfish {
     return { x: lx, y: ly };
   }
 
-  public getParasiteWorldPos(p: Parasite): Vector2D {
-    const local = this.getParasiteLocalPos(p);
-    return {
-      x: this.pos.x + local.x,
-      y: this.pos.y + local.y,
-    };
-  }
-
-  public updateParasites(
-    wrasseMouth: Vector2D | null,
-    gobiMouth: Vector2D | null,
-    _dt: number,
-    wrasseScale: number = 0.9,
-    gobiScale: number = 0.65
-  ) {
-    if (this.turnProgress > 0.4) return;
-
-    const wrasseEatDist = 20 * wrasseScale;
-    const gobiEatDist = 18 * gobiScale;
-
-    for (const p of this.parasites) {
-      if (p.removed) continue;
-      if (p.attachPart === 'operculum' && this.gillOpen < 0.6) continue;
-      if ((p.attachPart === 'upperTeeth' || p.attachPart === 'lowerTeeth') && this.mouthGate < 0.6) continue;
-
-      const wPos = this.getParasiteWorldPos(p);
-      let isEaten = false;
-
-      if (wrasseMouth) {
-        const d = Math.hypot(wPos.x - wrasseMouth.x, wPos.y - wrasseMouth.y);
-        if (d <= wrasseEatDist) isEaten = true;
-      }
-
-      if (!isEaten && gobiMouth) {
-        const d = Math.hypot(wPos.x - gobiMouth.x, wPos.y - gobiMouth.y);
-        if (d <= gobiEatDist) isEaten = true;
-      }
-
-      if (isEaten) {
-        p.removed = true;
-        p.hoverTimer = 1;
-      }
-    }
-  }
-
-  public getActiveParasitePositions(): Vector2D[] {
-    const spots: Vector2D[] = [];
-    for (const p of this.parasites) {
-      if (!p.removed) {
-        spots.push(this.getParasiteWorldPos(p));
-      }
-    }
-    return spots;
-  }
-
-  public getParasiteStats() {
-    let teethTotal = 0;
-    let teethRemoved = 0;
-    let bodyTotal = 0;
-    let bodyRemoved = 0;
-
-    for (const p of this.parasites) {
-      if (p.type === 'teeth') {
-        teethTotal++;
-        if (p.removed) teethRemoved++;
-      } else {
-        bodyTotal++;
-        if (p.removed) bodyRemoved++;
-      }
-    }
-
-    const total = teethTotal + bodyTotal;
-    const removed = teethRemoved + bodyRemoved;
-
-    return {
-      total,
-      remaining: total - removed,
-      removed,
-      teethRemaining: teethTotal - teethRemoved,
-      bodyRemaining: bodyTotal - bodyRemoved,
-    };
-  }
-
-  /**
-   * Calculate target X so the entire fish (from puckered mouth to streaming filament tail tips) is fully visible,
-   * anchored cleanly on the right side of the screen.
-   */
-  private getProfileTargetX(canvasWidth: number): number {
-    const s = this.scale;
-    // Whole body length from mouth (-40 * s) to filament tail streamer tips (+108 * s) is ~148 * s.
-    return canvasWidth - (109 * s + 24);
-  }
-
-  private getFacingTargetX(canvasWidth: number): number {
-    return Math.max(canvasWidth * 0.72, canvasWidth - 280);
-  }
-
-  public toggleFacingPlayer(): boolean {
-    return false;
-  }
-
-  public setFacingPlayer(_facing: boolean) {
-    this.facingPlayer = false;
-  }
-
-  public startExit() {
-    if (this.state !== 'exited') {
-      this.state = 'exiting';
-      this.facingPlayer = false;
-    }
-  }
-
-  public hitTest(pos: Vector2D): boolean {
-    const s = this.scale;
-    const dx = pos.x - this.pos.x;
-    const dy = pos.y - this.pos.y;
-    const minX = -45 * s;
-    const maxX = 55 * s;
-    const minY = -32 * s;
-    const maxY = 30 * s;
-    return dx >= minX && dx <= maxX && dy >= minY && dy <= maxY;
-  }
-
-  public update(width: number, height: number, dt: number = 1) {
+  public update(_w: number, _h: number, dt: number = 1) {
     const safeDt = clamp(dt, 0.2, 2.0);
     this.animTime += 0.03 * safeDt;
     this.breathPhase += 0.035 * safeDt;
     this.finPhase += 0.055 * safeDt;
     this.spinePhase += 0.025 * safeDt;
-
-    this.turnProgress = 0;
-    this.facingPlayer = false;
-
-    const profileX = this.getProfileTargetX(width);
-    const desiredTargetY = height * 0.48;
-
-    this.targetPos.x = profileX;
-    this.targetPos.y = desiredTargetY;
-
-    if (this.state === 'entering') {
-      const dx = this.targetPos.x - this.pos.x;
-      const dy = this.targetPos.y - this.pos.y;
-      const dist = Math.hypot(dx, dy);
-
-      if (dist > 4) {
-        this.pos.x += (dx / dist) * this.entrySpeed * safeDt;
-        this.pos.y += (dy / dist) * this.entrySpeed * safeDt;
-      } else {
-        this.pos.x = this.targetPos.x;
-        this.pos.y = this.targetPos.y;
-        this.state = 'stationary';
-      }
-    } else if (this.state === 'exiting') {
-      this.pos.x += this.exitSpeed * 1.5 * safeDt;
-      if (this.pos.x > width + 450) {
-        this.state = 'exited';
-        this.isVisible = false;
-      }
-    } else if (this.state === 'stationary') {
-      const buoyancyY = Math.sin(this.breathPhase * 0.7) * 2.8;
-      const buoyancyX = Math.cos(this.breathPhase * 0.45) * 1.2;
-
-      this.pos.x = lerp(this.pos.x, this.targetPos.x + buoyancyX, 0.035 * safeDt);
-      this.pos.y = lerp(this.pos.y, this.targetPos.y + buoyancyY, 0.035 * safeDt);
-    }
 
     this.mouthAperture = 0.85 + Math.sin(this.breathPhase) * 0.04;
   }
@@ -441,27 +250,6 @@ export class QueenTriggerfish {
     this.renderParasites(ctx);
 
     ctx.restore();
-  }
-
-  private renderParasites(ctx: CanvasRenderingContext2D) {
-    const unit = parasiteUnit(this.scale);
-    for (const p of this.parasites) {
-      const local = this.getParasiteLocalPos(p);
-      if (p.removed) {
-        if (p.hoverTimer > 0) {
-          ctx.save();
-          ctx.translate(local.x, local.y);
-          drawEatRing(ctx, unit, p.hoverTimer);
-          ctx.restore();
-          p.hoverTimer -= 0.02;
-        }
-        continue;
-      }
-      ctx.save();
-      ctx.translate(local.x, local.y);
-      drawParasite(ctx, unit, this.animTime, p.id, p.type === 'teeth');
-      ctx.restore();
-    }
   }
 
   /**
@@ -886,233 +674,5 @@ export class QueenTriggerfish {
     ctx.lineWidth = 0.8;
     ctx.stroke();
     ctx.restore();
-  }
-
-  // =========================================================================
-  // FRONT-FACING VIEW RENDERING (Queen Triggerfish)
-  // Highly compressed diamond keel, puckered mouth, erect trigger spine,
-  // radiant blue eye markings, and symmetrical angular fin crests.
-  // =========================================================================
-
-  private renderFrontFacing(
-    ctx: CanvasRenderingContext2D,
-    s: number,
-    breath: number,
-    finFlutter: number,
-    spineFlex: number,
-    alpha: number = 1.0
-  ) {
-    ctx.save();
-    if (alpha < 1.0) {
-      ctx.globalAlpha = ctx.globalAlpha * alpha;
-    }
-
-    const mouthOpen = this.mouthAperture;
-    const breathShift = breath * 1.5;
-    const flare = breath * 2.2;
-
-    // 1. Symmetrical Pectoral Fins
-    this.renderFrontSmoothPectoralFins(ctx, s, finFlutter);
-
-    // 2. Erect Dorsal Trigger Spine Tip
-    this.renderFrontSmoothTriggerSpine(ctx, s, spineFlex);
-
-    // 3. Tall Angular Second Dorsal & Anal Fin Crests
-    this.renderFrontSmoothFinCrests(ctx, s, finFlutter);
-
-    // 4. Highly Compressed Diamond Head Vault & Keel
-    this.renderFrontSmoothHeadVault(ctx, s, breathShift, flare);
-
-    // 5. Puckered Mouth & Chisel Teeth
-    this.renderFrontSmoothPuckeredMouth(ctx, s, mouthOpen);
-
-    // 6. High-Set Radiant Eyes
-    this.renderFrontSmoothEyes(ctx, s);
-
-    ctx.restore();
-  }
-
-  private renderFrontSmoothPectoralFins(ctx: CanvasRenderingContext2D, s: number, finFlutter: number) {
-    const scullLeft = finFlutter * 0.30;
-    const scullRight = -finFlutter * 0.30;
-
-    for (const side of [-1, 1]) {
-      ctx.save();
-      const rootX = side * 14 * s;
-      const rootY = 4 * s;
-      ctx.translate(rootX, rootY);
-      ctx.rotate(side === -1 ? scullLeft : scullRight);
-
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.bezierCurveTo(side * 10 * s, -8 * s, side * 22 * s, -4 * s, side * 24 * s, 3 * s);
-      ctx.bezierCurveTo(side * 20 * s, 10 * s, side * 8 * s, 12 * s, 0, 0);
-      ctx.closePath();
-
-      const fGrad = ctx.createLinearGradient(0, 0, side * 24 * s, 3 * s);
-      fGrad.addColorStop(0, 'rgba(56, 189, 248, 0.8)');
-      fGrad.addColorStop(0.6, 'rgba(250, 204, 21, 0.7)');
-      fGrad.addColorStop(1, 'rgba(251, 146, 60, 0.6)');
-      ctx.fillStyle = fGrad;
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
-      ctx.lineWidth = 0.8;
-      ctx.stroke();
-
-      ctx.restore();
-    }
-  }
-
-  private renderFrontSmoothTriggerSpine(ctx: CanvasRenderingContext2D, s: number, spineFlex: number) {
-    const wave = spineFlex * 1.0;
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(0, -22 * s);
-    ctx.bezierCurveTo(-4 * s, -30 * s + wave, -2 * s, -38 * s + wave, 0, -40 * s + wave);
-    ctx.bezierCurveTo(2 * s, -38 * s + wave, 4 * s, -30 * s + wave, 0, -22 * s);
-    ctx.closePath();
-
-    const sGrad = ctx.createLinearGradient(0, -22 * s, 0, -40 * s);
-    sGrad.addColorStop(0, '#0d9488');
-    sGrad.addColorStop(0.6, '#0284c7');
-    sGrad.addColorStop(1, '#38bdf8');
-    ctx.fillStyle = sGrad;
-    ctx.fill();
-    ctx.strokeStyle = '#38bdf8';
-    ctx.lineWidth = 1.0;
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  private renderFrontSmoothFinCrests(ctx: CanvasRenderingContext2D, s: number, finFlutter: number) {
-    const wave = finFlutter * 1.5;
-
-    ctx.save();
-    // Second Dorsal Crest Tip
-    ctx.beginPath();
-    ctx.moveTo(0, -24 * s);
-    ctx.lineTo(-6 * s, -42 * s + wave);
-    ctx.lineTo(6 * s, -42 * s + wave);
-    ctx.closePath();
-    ctx.fillStyle = 'rgba(56, 189, 248, 0.7)';
-    ctx.fill();
-
-    // Anal Fin Crest Tip
-    ctx.beginPath();
-    ctx.moveTo(0, 22 * s);
-    ctx.lineTo(-6 * s, 40 * s + wave);
-    ctx.lineTo(6 * s, 40 * s + wave);
-    ctx.closePath();
-    ctx.fillStyle = 'rgba(56, 189, 248, 0.7)';
-    ctx.fill();
-    ctx.restore();
-  }
-
-  private renderFrontSmoothHeadVault(ctx: CanvasRenderingContext2D, s: number, breathShift: number, flare: number) {
-    ctx.save();
-    ctx.beginPath();
-    // High narrow dorsal ridge
-    ctx.moveTo(0, -24 * s);
-    // Steep diamond slope to high-set eyes & cheeks
-    ctx.bezierCurveTo(-10 * s, -20 * s, -16 * s - flare * 0.5, -10 * s, -18 * s - flare, 0);
-    // Narrowing to ventral keel
-    ctx.bezierCurveTo(-16 * s - flare, 10 * s, -8 * s, 20 * s + breathShift, 0, 22 * s + breathShift);
-    // Symmetrical right side
-    ctx.bezierCurveTo(8 * s, 20 * s + breathShift, 16 * s + flare, 10 * s, 18 * s + flare, 0);
-    ctx.bezierCurveTo(16 * s + flare * 0.5, -10 * s, 10 * s, -20 * s, 0, -24 * s);
-    ctx.closePath();
-
-    const vaultGrad = ctx.createRadialGradient(0, -4 * s, 2 * s, 0, 0, 26 * s);
-    vaultGrad.addColorStop(0, '#0d9488'); // Emerald teal center
-    vaultGrad.addColorStop(0.45, '#0284c7'); // Turquoise
-    vaultGrad.addColorStop(0.8, '#0369a1'); // Ocean blue
-    vaultGrad.addColorStop(1, '#065f46');  // Deep emerald outer rim
-    ctx.fillStyle = vaultGrad;
-    ctx.fill();
-
-    // Electric-blue facial stripe bands glowing on the sides
-    ctx.beginPath();
-    ctx.ellipse(-12 * s, 2 * s, 3.5 * s, 1.5 * s, -0.2, 0, Math.PI * 2);
-    ctx.ellipse(12 * s, 2 * s, 3.5 * s, 1.5 * s, 0.2, 0, Math.PI * 2);
-    ctx.fillStyle = '#38bdf8';
-    ctx.fill();
-
-    // Warm orange throat glow on lower keel
-    ctx.beginPath();
-    ctx.ellipse(0, 14 * s, 7 * s, 4 * s, 0, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(251, 146, 60, 0.7)';
-    ctx.fill();
-
-    ctx.restore();
-  }
-
-  private renderFrontSmoothPuckeredMouth(ctx: CanvasRenderingContext2D, s: number, mouthOpen: number) {
-    const rx = 6.5 * s;
-    const ry = 4.2 * mouthOpen * s;
-    const cy = 6 * s;
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.ellipse(0, cy, rx, ry, 0, 0, Math.PI * 2);
-    const mouthGrad = ctx.createRadialGradient(0, cy, 1 * s, 0, cy, rx);
-    mouthGrad.addColorStop(0, '#0f172a');
-    mouthGrad.addColorStop(0.6, '#f97316');
-    mouthGrad.addColorStop(1, '#fbbf24');
-    ctx.fillStyle = mouthGrad;
-    ctx.fill();
-    ctx.strokeStyle = '#f97316';
-    ctx.lineWidth = 1.2;
-    ctx.stroke();
-
-    // Front chisel teeth
-    ctx.beginPath();
-    ctx.rect(-1.5 * s, cy - 1.5 * s, 3.0 * s, 1.5 * s);
-    ctx.fillStyle = '#ffffff';
-    ctx.fill();
-
-    ctx.restore();
-  }
-
-  private renderFrontSmoothEyes(ctx: CanvasRenderingContext2D, s: number) {
-    for (const side of [-1, 1]) {
-      const eyeX = side * 15 * s;
-      const eyeY = -12 * s;
-      const eyeRadius = 3.6 * s;
-
-      ctx.save();
-      // Radiant lines
-      ctx.strokeStyle = '#38bdf8';
-      ctx.lineWidth = 1.0;
-      ctx.beginPath();
-      ctx.moveTo(eyeX + side * 3 * s, eyeY - 2 * s); ctx.lineTo(eyeX + side * 6 * s, eyeY - 4 * s);
-      ctx.moveTo(eyeX + side * 3 * s, eyeY + 2 * s); ctx.lineTo(eyeX + side * 6 * s, eyeY + 4 * s);
-      ctx.stroke();
-
-      // Gold orbital ring
-      ctx.beginPath();
-      ctx.arc(eyeX, eyeY, eyeRadius + 0.8 * s, 0, Math.PI * 2);
-      ctx.fillStyle = '#f59e0b';
-      ctx.fill();
-
-      // Iris
-      ctx.beginPath();
-      ctx.arc(eyeX, eyeY, eyeRadius, 0, Math.PI * 2);
-      ctx.fillStyle = '#ca8a04';
-      ctx.fill();
-
-      // Pupil
-      ctx.beginPath();
-      ctx.arc(eyeX - side * 0.6 * s, eyeY, eyeRadius * 0.55, 0, Math.PI * 2);
-      ctx.fillStyle = '#020617';
-      ctx.fill();
-
-      // Specular
-      ctx.beginPath();
-      ctx.arc(eyeX - side * 1.1 * s, eyeY - 1.0 * s, 1.2 * s, 0, Math.PI * 2);
-      ctx.fillStyle = '#ffffff';
-      ctx.fill();
-      ctx.restore();
-    }
   }
 }

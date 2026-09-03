@@ -1,12 +1,7 @@
 import { Vector2D, Parasite } from '../types';
-import { lerp, clamp } from '../utils/math';
-import { parasiteUnit, drawParasite, drawEatRing, subsampleParasites } from './parasiteFx';
-
-export interface CleaningTargetSpot {
-  id: string;
-  name: string;
-  pos: Vector2D;
-}
+import { lerp } from '../utils/math';
+import { subsampleParasites } from './parasiteFx';
+import { ClientFishBase, CleaningTargetSpot } from './ClientFishBase';
 
 /**
  * Whitespotted Filefish (Cantherhines macrocerus)
@@ -21,53 +16,22 @@ export interface CleaningTargetSpot {
  * - Small, delicate, rapidly fluttering pectoral fins
  * - High soft dorsal and anal fins set far back with rhythmic undulation
  * - Rounded fan-shaped caudal fin with robust peduncle spines
- * - Procedural 3D perspective turning (Profile <-> Facing Player)
  * - Complete parasite cleaning network across chisel teeth, dorsal spine, flanks, and pelvic keel
  */
-export class WhitespottedFilefish {
-  public pos: Vector2D = { x: 0, y: 0 };
-  public targetPos: Vector2D = { x: 0, y: 0 };
-  public heading: number = Math.PI; // Facing left toward cleaning station in profile
-
+export class WhitespottedFilefish extends ClientFishBase {
   // Scaled up by 20% (from 2.0 to 2.4)
   public scale: number = 2.4;
-
-  public state: 'entering' | 'stationary' | 'exiting' | 'exited' = 'entering';
-  public entrySpeed: number = 2.5;
-  public exitSpeed: number = 3.0;
-
-  public animTime: number = 0;
-  public breathPhase: number = 0;
-  public finPhase: number = 0;
   public spinePhase: number = 0;
   public mouthAperture: number = 0.7; // Small mouth rhythmic aperture
-
-  public isVisible: boolean = true;
-
-  // Procedural Turn & Perspective Facing State
-  public facingPlayer: boolean = false;
-  public turnProgress: number = 0; // 0.0 = Profile, 1.0 = Facing Player
-  public turnSpeed: number = 0.0075;
 
   // White spot coordinates (relative to fish local origin)
   private whiteSpots: { x: number; y: number; r: number; alpha: number }[] = [];
 
-  // Parasites on teeth and body
-  public parasites: Parasite[] = [];
-
-  // Cavity gates driven by the ClientDirector (1 = open/eatable):
-  // gill parasites hide under the operculum flap, teeth behind the lips.
-  public gillOpen: number = 1;
-  public mouthGate: number = 1;
-
   constructor(canvasWidth: number, canvasHeight: number) {
-    // Start offscreen to the right
+    super();
+    // Start offscreen to the right; the director swims the fish in from here
     this.pos = {
       x: canvasWidth + 420,
-      y: canvasHeight * 0.47,
-    };
-    this.targetPos = {
-      x: this.getProfileTargetX(canvasWidth),
       y: canvasHeight * 0.47,
     };
 
@@ -121,7 +85,7 @@ export class WhitespottedFilefish {
   /**
    * Initialize parasites over the small chisel teeth, tall dorsal spine, and rough leathery flank
    */
-  private initParasites() {
+  protected initParasites() {
     this.parasites = [];
     let id = 400;
 
@@ -282,111 +246,6 @@ export class WhitespottedFilefish {
     return { x: lx, y: ly };
   }
 
-  public getParasiteWorldPos(p: Parasite): Vector2D {
-    const local = this.getParasiteLocalPos(p);
-    return {
-      x: this.pos.x + local.x,
-      y: this.pos.y + local.y,
-    };
-  }
-
-  public updateParasites(
-    wrasseMouth: Vector2D | null,
-    gobiMouth: Vector2D | null,
-    _dt: number,
-    wrasseScale: number = 0.9,
-    gobiScale: number = 0.65
-  ) {
-    if (this.turnProgress > 0.4) return;
-
-    const wrasseEatDist = 20 * wrasseScale;
-    const gobiEatDist = 18 * gobiScale;
-
-    for (const p of this.parasites) {
-      if (p.removed) continue;
-      if (p.attachPart === 'operculum' && this.gillOpen < 0.6) continue;
-      if ((p.attachPart === 'upperTeeth' || p.attachPart === 'lowerTeeth') && this.mouthGate < 0.6) continue;
-
-      const wPos = this.getParasiteWorldPos(p);
-      let isEaten = false;
-
-      if (wrasseMouth) {
-        const d = Math.hypot(wPos.x - wrasseMouth.x, wPos.y - wrasseMouth.y);
-        if (d <= wrasseEatDist) isEaten = true;
-      }
-
-      if (!isEaten && gobiMouth) {
-        const d = Math.hypot(wPos.x - gobiMouth.x, wPos.y - gobiMouth.y);
-        if (d <= gobiEatDist) isEaten = true;
-      }
-
-      if (isEaten) {
-        p.removed = true;
-        p.hoverTimer = 1;
-      }
-    }
-  }
-
-  public getActiveParasitePositions(): Vector2D[] {
-    const spots: Vector2D[] = [];
-    for (const p of this.parasites) {
-      if (!p.removed) {
-        spots.push(this.getParasiteWorldPos(p));
-      }
-    }
-    return spots;
-  }
-
-  public getParasiteStats() {
-    let teethTotal = 0;
-    let teethRemoved = 0;
-    let bodyTotal = 0;
-    let bodyRemoved = 0;
-
-    for (const p of this.parasites) {
-      if (p.type === 'teeth') {
-        teethTotal++;
-        if (p.removed) teethRemoved++;
-      } else {
-        bodyTotal++;
-        if (p.removed) bodyRemoved++;
-      }
-    }
-
-    const total = teethTotal + bodyTotal;
-    const removed = teethRemoved + bodyRemoved;
-    const remaining = total - removed;
-
-    return {
-      total,
-      remaining,
-      removed,
-      teethRemaining: teethTotal - teethRemoved,
-      bodyRemaining: bodyTotal - bodyRemoved,
-    };
-  }
-
-  private getProfileTargetX(canvasWidth: number): number {
-    const s = this.scale;
-    // Total length from small mouth (-38*s) to caudal tip (+68*s)
-    return canvasWidth - (70 * s + 30);
-  }
-
-  public startExit() {
-    if (this.state !== 'exiting' && this.state !== 'exited') {
-      this.state = 'exiting';
-      this.facingPlayer = false; // Turn back to profile before swimming in reverse
-    }
-  }
-
-  public setFacingPlayer(_facing: boolean) {
-    this.facingPlayer = false;
-  }
-
-  public toggleFacingPlayer(): boolean {
-    return false;
-  }
-
   public hitTest(pos: Vector2D): boolean {
     if (this.state === 'exited' || !this.isVisible) return false;
     const dx = pos.x - this.pos.x;
@@ -431,7 +290,7 @@ export class WhitespottedFilefish {
     return spots;
   }
 
-  public update(canvasWidth: number, canvasHeight: number, dt: number) {
+  public update(_w: number, _h: number, dt: number) {
     this.animTime += dt * 0.035;
     this.breathPhase += dt * 0.045;
     this.finPhase += dt * 0.16; // Rapid flutter characteristic of filefish fins
@@ -439,48 +298,6 @@ export class WhitespottedFilefish {
 
     // Small mouth subtle rhythmic pulsing
     this.mouthAperture = 0.65 + Math.sin(this.breathPhase * 1.5) * 0.25;
-
-    this.turnProgress = 0;
-    this.facingPlayer = false;
-
-    const profileTargetX = this.getProfileTargetX(canvasWidth);
-    this.targetPos.x = profileTargetX;
-    this.targetPos.y = canvasHeight * 0.47;
-
-    // Floating subtle bobbing
-    const bob = Math.sin(this.animTime * 1.2) * (3.5 * (1 - this.turnProgress * 0.4));
-    const sway = Math.cos(this.animTime * 0.9) * 2.0;
-
-    // State Machine
-    if (this.state === 'entering') {
-      const dx = this.targetPos.x - this.pos.x;
-      const dy = this.targetPos.y - this.pos.y;
-      const dist = Math.hypot(dx, dy);
-
-      if (dist < 4.0) {
-        this.state = 'stationary';
-        this.pos.x = this.targetPos.x;
-        this.pos.y = this.targetPos.y;
-      } else {
-        this.pos.x += (dx / dist) * this.entrySpeed * dt;
-        this.pos.y += (dy / dist) * this.entrySpeed * dt;
-      }
-    } else if (this.state === 'stationary') {
-      const dx = this.targetPos.x - this.pos.x;
-      const dy = this.targetPos.y - this.pos.y;
-      this.pos.x += dx * 0.05 * dt;
-      this.pos.y += dy * 0.05 * dt;
-    } else if (this.state === 'exiting') {
-      // Graceful reverse exit back to the right
-      this.pos.x += this.exitSpeed * dt;
-      if (this.pos.x > canvasWidth + 500) {
-        this.state = 'exited';
-        this.isVisible = false;
-      }
-    }
-
-    this.pos.y += bob * 0.04 * dt;
-    this.pos.x += sway * 0.02 * dt;
   }
 
   /**
@@ -627,7 +444,7 @@ export class WhitespottedFilefish {
   /**
    * Caudal Fin: Rounded fan-like tail with dark marginal bands and strong peduncle spines
    */
-  private renderCaudalFin(ctx: CanvasRenderingContext2D, s: number, finWave: number) {
+  private renderCaudalFin(ctx: CanvasRenderingContext2D, s: number, _finWave: number) {
     ctx.save();
     const sway = Math.sin(this.animTime * 1.5) * 3;
 
@@ -1008,161 +825,6 @@ export class WhitespottedFilefish {
       ctx.lineTo(8.5 * s, i * 1.5 * s + 1 * s);
       ctx.stroke();
     }
-
-    ctx.restore();
-  }
-
-  /**
-   * Parasite Rendering & Interactive Station Target Glows
-   */
-  private renderParasites(ctx: CanvasRenderingContext2D) {
-    const unit = parasiteUnit(this.scale);
-    for (const p of this.parasites) {
-      const local = this.getParasiteLocalPos(p);
-      if (p.removed) {
-        if (p.hoverTimer > 0) {
-          ctx.save();
-          ctx.translate(local.x, local.y);
-          drawEatRing(ctx, unit, p.hoverTimer);
-          ctx.restore();
-          p.hoverTimer -= 0.02;
-        }
-        continue;
-      }
-      ctx.save();
-      ctx.translate(local.x, local.y);
-      drawParasite(ctx, unit, this.animTime, p.id, p.type === 'teeth');
-      ctx.restore();
-    }
-  }
-
-  /**
-   * Facing-Player View:
-   * Frontal view of the laterally compressed filefish with deep vertical cross-section,
-   * tall erect dorsal spine, wide lateral eyes, small puckered terminal mouth, and pelvic keel.
-   */
-  private renderFacingPlayer(ctx: CanvasRenderingContext2D) {
-    const s = this.scale;
-    const breathOffset = Math.sin(this.breathPhase) * 2.0;
-
-    // 1. Tall Erect Dorsal Spine (Centered on top)
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(-2 * s, -24 * s);
-    ctx.lineTo(0, -42 * s); // Tall dorsal point
-    ctx.lineTo(2 * s, -24 * s);
-    ctx.closePath();
-    ctx.fillStyle = '#c5bea0';
-    ctx.fill();
-    ctx.strokeStyle = '#3a3227';
-    ctx.lineWidth = 1.2;
-    ctx.stroke();
-    ctx.restore();
-
-    // 2. Laterally Compressed Frontal Body Silhouette
-    ctx.save();
-    ctx.beginPath();
-    // Top crest
-    ctx.moveTo(0, -25 * s);
-    // Upper forehead slope
-    ctx.bezierCurveTo(-14 * s, -18 * s, -18 * s, -8 * s, -16 * s, 2 * s);
-    // Lower cheek & operculum
-    ctx.bezierCurveTo(-14 * s, 12 * s, -8 * s, 20 * s + breathOffset, 0, 26 * s + breathOffset);
-    // Right side
-    ctx.bezierCurveTo(8 * s, 20 * s + breathOffset, 14 * s, 12 * s, 16 * s, 2 * s);
-    ctx.bezierCurveTo(18 * s, -8 * s, 14 * s, -18 * s, 0, -25 * s);
-    ctx.closePath();
-
-    const frontGrad = ctx.createRadialGradient(0, 0, 3 * s, 0, 0, 24 * s);
-    frontGrad.addColorStop(0, '#665c4c');
-    frontGrad.addColorStop(0.7, '#4d463a');
-    frontGrad.addColorStop(1, '#2f2a22');
-    ctx.fillStyle = frontGrad;
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(180, 175, 160, 0.4)';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-
-    // Rough leathery stippling & white spots in front view
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
-    const frontSpots = [
-      { x: -7 * s, y: -10 * s },
-      { x: 7 * s, y: -10 * s },
-      { x: -10 * s, y: 0 },
-      { x: 10 * s, y: 0 },
-      { x: -5 * s, y: 12 * s },
-      { x: 5 * s, y: 12 * s },
-      { x: 0, y: -15 * s },
-    ];
-    for (const sp of frontSpots) {
-      ctx.beginPath();
-      ctx.arc(sp.x, sp.y, 1.2 * (s / 4.8), 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // 3. Wide Lateral Eyes
-    const renderFrontEye = (x: number, y: number) => {
-      ctx.beginPath();
-      ctx.ellipse(x, y, 3.5 * s, 4.2 * s, 0, 0, Math.PI * 2);
-      ctx.fillStyle = '#2f2820';
-      ctx.fill();
-      ctx.strokeStyle = '#8a7d6e';
-      ctx.lineWidth = 1.0;
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.arc(x, y, 3.0 * s, 0, Math.PI * 2);
-      ctx.fillStyle = '#bfa163';
-      ctx.fill();
-
-      ctx.beginPath();
-      ctx.arc(x, y, 1.8 * s, 0, Math.PI * 2);
-      ctx.fillStyle = '#08080a';
-      ctx.fill();
-
-      ctx.beginPath();
-      ctx.arc(x - 0.8 * s, y - 0.8 * s, 0.8 * s, 0, Math.PI * 2);
-      ctx.fillStyle = '#ffffff';
-      ctx.fill();
-    };
-
-    renderFrontEye(-14 * s, -6 * s);
-    renderFrontEye(14 * s, -6 * s);
-
-    // 4. Frontal Small Terminal Mouth Aperture
-    ctx.beginPath();
-    ctx.ellipse(0, 8 * s, 3.0 * s, 2.2 * s * this.mouthAperture, 0, 0, Math.PI * 2);
-    ctx.fillStyle = '#1c150e';
-    ctx.fill();
-    ctx.strokeStyle = '#a89886';
-    ctx.lineWidth = 1.2;
-    ctx.stroke();
-
-    // Chisel teeth front view
-    ctx.fillStyle = '#fffdf5';
-    ctx.fillRect(-1.2 * s, 6.8 * s, 2.4 * s, 1.0 * s);
-    ctx.fillRect(-1.2 * s, 8.8 * s * this.mouthAperture, 2.4 * s, 1.0 * s);
-
-    // 5. Bilateral Small Pectoral Fins (Fluttering outward)
-    const finFlutter = Math.sin(this.finPhase) * 0.3;
-
-    ctx.save();
-    ctx.translate(-16 * s, 4 * s);
-    ctx.rotate(-0.4 + finFlutter);
-    ctx.beginPath();
-    ctx.ellipse(0, 0, 6 * s, 3 * s, 0, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(230, 205, 160, 0.6)';
-    ctx.fill();
-    ctx.restore();
-
-    ctx.save();
-    ctx.translate(16 * s, 4 * s);
-    ctx.rotate(0.4 - finFlutter);
-    ctx.beginPath();
-    ctx.ellipse(0, 0, 6 * s, 3 * s, 0, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(230, 205, 160, 0.6)';
-    ctx.fill();
-    ctx.restore();
 
     ctx.restore();
   }

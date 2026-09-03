@@ -1,25 +1,44 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BookOpen, HelpCircle, MousePointer, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { ControlledFish, ClientFishInfo } from '../types';
-import { CLIENT_SPECIES_FIELD_NOTES } from '../data/clientFieldNotes';
+import { ControlledFish, ClientFishInfo, ParasiteStats } from '../types';
+import { SPECIES, CLEANERS } from '../data/species';
 
 interface ControlsOverlayProps {
-  isRunning?: boolean;
-  onToggleRunning?: () => void;
   selectedFish: ControlledFish;
   onSelectFish: (fish: ControlledFish) => void;
-  onNextFish?: () => void;
   clientFishInfo?: ClientFishInfo;
-  parasiteStats?: {
-    total: number;
-    remaining: number;
-    removed: number;
-    teethRemaining: number;
-    bodyRemaining: number;
-  };
+  parasiteStats?: ParasiteStats;
   onFieldNoteVisibilityChange?: (isVisible: boolean) => void;
 }
+
+const ResourceGroup: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
+  <div>
+    <div className="text-[9px] uppercase tracking-[0.25em] text-cyan-300/80 font-mono mb-1">{title}</div>
+    <ul className="space-y-1.5">{children}</ul>
+  </div>
+);
+
+const Resource: React.FC<{ href: string; title: string; children?: React.ReactNode }> = ({
+  href,
+  title,
+  children,
+}) => (
+  <li className="flex items-start gap-2">
+    <span className="text-cyan-400 font-bold shrink-0 mt-0.5">•</span>
+    <span>
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-cyan-200 hover:text-white underline decoration-cyan-400/50 underline-offset-2"
+      >
+        {title}
+      </a>
+      {children && <span className="opacity-85">. {children}</span>}
+    </span>
+  </li>
+);
 
 export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
   selectedFish,
@@ -31,12 +50,11 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
   const [helpOpen, setHelpOpen] = useState(false);
   const [infoTab, setInfoTab] = useState<'instructions' | 'about' | 'resources'>('instructions');
   const [fieldNoteOpen, setFieldNoteOpen] = useState(false);
-  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const helpRef = useRef<HTMLDivElement | null>(null);
+  const helpButtonRef = useRef<HTMLButtonElement | null>(null);
 
-  const activeCleanerName =
-    selectedFish === 'wrasse' ? 'Spanish Hogfish (Juvenile)' : 'Sharknose Goby';
-  const activeCleanerScientific =
-    selectedFish === 'wrasse' ? 'Bodianus rufus' : 'Elacatinus evelynae';
+  const activeCleaner = CLEANERS[selectedFish];
 
   const species = clientFishInfo?.species || 'grouper';
   const clientName = clientFishInfo?.name || '';
@@ -49,7 +67,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
   );
   const patienceFrac = Math.max(0, Math.min(1, clientFishInfo?.patienceFrac ?? 1));
 
-  const activeNote = species in CLIENT_SPECIES_FIELD_NOTES ? CLIENT_SPECIES_FIELD_NOTES[species] : null;
+  const activeNote = SPECIES[species].fieldNote;
 
   // Handle open / close lifecycle for the 15-second field note
   const handleOpenFieldNote = () => {
@@ -89,6 +107,18 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
       };
     }
   }, [fieldNoteOpen]);
+
+  // Clicking anywhere outside the info modal (or its button) closes it
+  useEffect(() => {
+    if (!helpOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (helpRef.current?.contains(t) || helpButtonRef.current?.contains(t)) return;
+      setHelpOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [helpOpen]);
 
   // If the client fish departs, close the field note
   useEffect(() => {
@@ -134,7 +164,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
               Coral Reef Cleaning Station
             </h1>
             <p className="text-[10px] opacity-60 uppercase tracking-widest font-mono text-cyan-200">
-              Active Cleaner: {activeCleanerName} ({activeCleanerScientific})
+              Active Cleaner: {activeCleaner.name} ({activeCleaner.scientificName})
             </p>
           </div>
         </div>
@@ -202,7 +232,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
 
           {/* Field Note Card: slowly slides down on name click, auto slides back after 15s or on close */}
           <AnimatePresence>
-            {fieldNoteOpen && activeNote && isClientPresent && (
+            {fieldNoteOpen && isClientPresent && (
               <motion.div
                 id="client-field-note-card"
                 initial={{ opacity: 0, y: -28, scale: 0.94 }}
@@ -248,6 +278,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
       {helpOpen && (
         <div
           id="instructions-modal"
+          ref={helpRef}
           className="pointer-events-auto absolute bottom-24 sm:bottom-28 left-1/2 -translate-x-1/2 w-[490px] max-w-[92vw] h-[290px] max-h-[75vh] flex flex-col backdrop-blur-xl bg-[#001830]/95 border border-cyan-400/40 rounded-2xl p-5 text-white shadow-[0_16px_48px_rgba(0,0,0,0.6)] z-30"
         >
           {/* Header with 3 Tabs and Close button */}
@@ -340,9 +371,78 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
               </div>
             )}
 
-            {/* Tab 3: Resources (Blank for now) */}
+            {/* Tab 3: Resources */}
             {infoTab === 'resources' && (
-              <div className="py-2 font-sans" />
+              <div className="py-1 font-sans text-slate-100 text-[11.5px] leading-relaxed space-y-3">
+                <p className="opacity-90">
+                  Here are some of the reads, videos and papers we leaned on, if you want to go deeper.
+                </p>
+                <ResourceGroup title="Start here">
+                  <Resource href="https://en.wikipedia.org/wiki/Cleaning_station" title="Cleaning station">
+                    What a station is, who turns up, and why nobody eats anybody.
+                  </Resource>
+                  <Resource href="https://en.wikipedia.org/wiki/Cleaner_fish" title="Cleaner fish">
+                    The cleaners themselves, and why taking a bite of the fish mucus is tastier than parasites.
+                  </Resource>
+                </ResourceGroup>
+
+                <ResourceGroup title="Fun reads & videos">
+                  <Resource
+                    href="https://india.mongabay.com/2019/07/where-do-fish-go-for-a-spa/"
+                    title="Where do fish go for a spa, and a diver's encounter with a cleaner wrasse"
+                  />
+                  <Resource
+                    href="https://www.nationalgeographic.com/science/article/cleaner-fish-punish-cheats-who-offend-their-customers"
+                    title="Cleaner fish punish cheats who offend their customers"
+                  />
+                  <Resource
+                    href="https://roundglasssustain.com/photo-stories/cleaning-symbiosis"
+                    title="Cleaning symbiosis photo & video collection"
+                  />
+                  <Resource
+                    href="https://divemagazine.com/marine-life/the-mutual-benefits-of-ocean-cleaning-stations"
+                    title="The mutual benefits of ocean cleaning stations"
+                  >
+                    Written for divers, so it covers what you would notice hovering nearby: queues, regulars, and manta rays coming in for the full treatment.
+                  </Resource>
+                </ResourceGroup>
+
+                <ResourceGroup title="Papers">
+                  <Resource href="https://www.int-res.com/articles/meps/130/m130p061.pdf" title="Grutter 1996, parasite removal rates">
+                    Free PDF with the numbers: seconds per client, clients per day, parasites per bite.
+                  </Resource>
+                  <Resource
+                    href="https://www.science.org/doi/10.1126/science.1183068"
+                    title="Punishers benefit from third-party punishment in fish"
+                  >
+                    The reason the station is neutral ground, and why nobody eats the cleaner.
+                  </Resource>
+                  <Resource
+                    href="https://www.sciencedirect.com/science/article/pii/S0960982210012911"
+                    title="Self-serving punishment of a common enemy"
+                  >
+                    About the impostor: a blenny that dresses like a cleaner and bites instead. Its victims chase it off, and every fish that looks like it benefits.
+                  </Resource>
+                  <Resource
+                    href="https://doi.org/10.1016/j.cub.2004.05.048"
+                    title="Cleaner fish use tactile dancing behaviour as a pre-conflict strategy"
+                  >
+                    Why your cleaner sways when it calls a client over. Real cleaners bob and dance to greet their clients, and do it most for the dangerous ones.
+                  </Resource>
+                  <Resource
+                    href="https://oliveiralab.org/wp-content/uploads/2014/11/2011_soares_etal.pdf"
+                    title="Tactile stimulation lowers stress in fish"
+                  >
+                    Free PDF showing the massage really works, measured in cortisol rather than vibes. It is the idea behind a client's patience topping up while you work on it.
+                  </Resource>
+                  <Resource
+                    href="https://journals.plos.org/plosone/article?id=10.1371%2Fjournal.pone.0045998"
+                    title="Individual differences in sabre-tooth blenny foraging"
+                  >
+                    More on the impostor. Some blennies take the hint after being chased, and some never do.
+                  </Resource>
+                </ResourceGroup>
+              </div>
             )}
           </div>
         </div>
@@ -354,6 +454,7 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
           <button
             type="button"
             id="open-instructions-btn"
+            ref={helpButtonRef}
             onClick={() => {
               setHelpOpen((o) => {
                 if (!o) setInfoTab('instructions');
@@ -368,33 +469,33 @@ export const ControlsOverlay: React.FC<ControlsOverlayProps> = ({
           </button>
           <div className="flex items-center bg-white/5 p-1 rounded-2xl border border-white/10">
             <button
-              id="select-wrasse-btn"
+              id="select-hogfish-btn"
               type="button"
-              onClick={() => onSelectFish('wrasse')}
+              onClick={() => onSelectFish('hogfish')}
               className={`text-[10px] sm:text-[11px] uppercase tracking-wider font-mono px-3.5 py-1.5 rounded-xl transition duration-150 cursor-pointer flex items-center gap-1.5 ${
-                selectedFish === 'wrasse'
+                selectedFish === 'hogfish'
                   ? 'bg-cyan-400 text-black font-semibold shadow-[0_0_12px_rgba(34,211,238,0.6)]'
                   : 'text-white/60 hover:bg-white/10 hover:text-white'
               }`}
             >
               <MousePointer
-                className={`w-3 h-3 ${selectedFish === 'wrasse' ? 'text-black' : 'text-cyan-400'}`}
+                className={`w-3 h-3 ${selectedFish === 'hogfish' ? 'text-black' : 'text-cyan-400'}`}
               />
               <span>Spanish Hogfish</span>
             </button>
 
             <button
-              id="select-gobi-btn"
+              id="select-goby-btn"
               type="button"
-              onClick={() => onSelectFish('gobi')}
+              onClick={() => onSelectFish('goby')}
               className={`text-[10px] sm:text-[11px] uppercase tracking-wider font-mono px-3.5 py-1.5 rounded-xl transition duration-150 cursor-pointer flex items-center gap-1.5 ${
-                selectedFish === 'gobi'
+                selectedFish === 'goby'
                   ? 'bg-cyan-400 text-black font-semibold shadow-[0_0_12px_rgba(34,211,238,0.6)]'
                   : 'text-white/60 hover:bg-white/10 hover:text-white'
               }`}
             >
               <MousePointer
-                className={`w-3 h-3 ${selectedFish === 'gobi' ? 'text-black' : 'text-cyan-400'}`}
+                className={`w-3 h-3 ${selectedFish === 'goby' ? 'text-black' : 'text-cyan-400'}`}
               />
               <span>Sharknose Goby</span>
             </button>
